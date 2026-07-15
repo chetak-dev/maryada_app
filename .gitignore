@@ -1,0 +1,58 @@
+# ============ IDE ============
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# ============ OS ============
+.DS_Store
+Thumbs.db
+
+# ============ Secrets / local config ============
+# Firebase config files (contain project keys)
+**/google-services.json
+**/GoogleService-Info.plist
+# Local machine paths & signing
+**/local.properties
+*.keystore
+*.jks
+key.properties
+
+# ============ Flutter / Dart (parent_app) ============
+parent_app/.dart_tool/
+parent_app/.flutter-plugins
+parent_app/.flutter-plugins-dependencies
+parent_app/.packages
+parent_app/.pub-cache/
+parent_app/.pub/
+parent_app/build/
+parent_app/coverage/
+parent_app/*.iml
+parent_app/.metadata
+
+# Flutter/iOS generated
+parent_app/ios/Flutter/Generated.xcconfig
+parent_app/ios/Flutter/flutter_export_environment.sh
+parent_app/ios/Flutter/ephemeral/
+parent_app/ios/Pods/
+parent_app/ios/.symlinks/
+
+# ============ Android (child_android & parent_app/android) ============
+**/.gradle/
+**/build/
+**/.cxx/
+child_android/local.properties
+child_android/app/build/
+child_android/.kotlin/
+
+# ============ Firebase (backend) ============
+**/.firebase/
+**/firebase-debug.log
+**/firestore-debug.log
+**/ui-debug.log
+
+# ============ Node (if any) ============
+node_modules/
+
+# ============ Logs ============
+*.log

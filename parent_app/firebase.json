@@ -1,0 +1,28 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "guardnest-1ec2c",
+          "appId": "1:361102633654:android:dad20139ce8d5239ccd417",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "guardnest-1ec2c",
+          "configurations": {
+            "android": "1:361102633654:android:dad20139ce8d5239ccd417",
+            "web": "1:361102633654:web:f0c75e875ac477fdccd417"
+          }
+        }
+      }
+    }
+  },
+  "hosting": {
+    "site": "maryada",
+    "public": "build/web",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [{ "source": "**", "destination": "/index.html" }]
+  }
+}
