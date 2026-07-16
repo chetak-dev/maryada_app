@@ -11,6 +11,6 @@ import android.content.Intent
  */
 class GuardNestAdminReceiver : DeviceAdminReceiver() {
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
-        return "Turning this off will let GuardNest be removed. Ask a parent first."
+        return "Turning this off will let Maryada be removed. Ask a parent first."
     }
 }

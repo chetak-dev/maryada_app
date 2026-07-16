@@ -620,7 +620,7 @@ class EnforcementService : Service() {
             LockOverlay.show(
                 this,
                 "App locked",
-                "Turn your GuardNest protections back on to use this app.",
+                "Turn your Maryada protections back on to use this app.",
             )
         }
     }
@@ -1003,7 +1003,7 @@ class EnforcementService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID, "Protection", NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "Keeps GuardNest protection active." }
+            ).apply { description = "Keeps Maryada protection active." }
             nm.createNotificationChannel(channel)
         }
         val notification: Notification =
@@ -1011,7 +1011,7 @@ class EnforcementService : Service() {
                 Notification.Builder(this, CHANNEL_ID)
             else
                 @Suppress("DEPRECATION") Notification.Builder(this))
-                .setContentTitle("GuardNest is active")
+                .setContentTitle("Maryada is active")
                 .setContentText("Family protection is on.")
                 .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
                 .setOngoing(true)

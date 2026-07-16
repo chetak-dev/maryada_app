@@ -29,7 +29,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="GuardNest Kid"
+        android:label="Maryada"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
 
@@ -48,7 +48,7 @@
         <receiver
             android:name=".GuardNestAdminReceiver"
             android:description="@string/admin_description"
-            android:label="GuardNest Kid"
+            android:label="Maryada"
             android:permission="android.permission.BIND_DEVICE_ADMIN"
             android:exported="true">
             <meta-data

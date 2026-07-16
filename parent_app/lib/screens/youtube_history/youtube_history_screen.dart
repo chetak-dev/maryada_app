@@ -24,6 +24,7 @@ class YoutubeHistoryScreen extends StatefulWidget {
 
 class _YoutubeHistoryScreenState extends State<YoutubeHistoryScreen> {
   String _query = '';
+  int _period = 0; // 0 = Today, 1 = Last week, 2 = This month
 
   bool get _live =>
       widget.familyId != null && widget.childId != null && Db.ready;
@@ -46,7 +47,6 @@ class _YoutubeHistoryScreenState extends State<YoutubeHistoryScreen> {
           ? const _Empty(text: 'Connect a device to see YouTube history.')
           : Column(
               children: [
-                const _InfoBanner(),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(AppSpacing.md,
                       AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
@@ -56,6 +56,14 @@ class _YoutubeHistoryScreenState extends State<YoutubeHistoryScreen> {
                       hintText: 'Search videos or channels',
                       prefixIcon: Icon(Icons.search_rounded),
                     ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(AppSpacing.md, 0,
+                      AppSpacing.md, AppSpacing.sm),
+                  child: _PeriodSelector(
+                    selected: _period,
+                    onChanged: (i) => setState(() => _period = i),
                   ),
                 ),
                 Expanded(
@@ -78,19 +86,69 @@ class _YoutubeHistoryScreenState extends State<YoutubeHistoryScreen> {
                       if (videos.isEmpty) {
                         return const _Empty(text: 'No matching videos.');
                       }
+                      final now = DateTime.now();
+                      final startOfToday =
+                          DateTime(now.year, now.month, now.day);
+                      final weekAgo = now.subtract(const Duration(days: 7));
+                      bool isToday(YoutubeVideo v) =>
+                          v.at != null && !v.at!.isBefore(startOfToday);
+                      bool isLastWeek(YoutubeVideo v) =>
+                          v.at != null &&
+                          v.at!.isBefore(startOfToday) &&
+                          v.at!.isAfter(weekAgo);
+                      final today = videos.where(isToday).toList();
+                      final lastWeek = videos.where(isLastWeek).toList();
+                      final thisMonth = videos
+                          .where((v) => !isToday(v) && !isLastWeek(v))
+                          .toList();
+                      final selected =
+                          [today, lastWeek, thisMonth][_period];
+                      if (selected.isEmpty) {
+                        return const _Empty(
+                            text: 'No videos in this period.');
+                      }
                       return ListView.separated(
                         padding: const EdgeInsets.fromLTRB(AppSpacing.md,
                             AppSpacing.sm, AppSpacing.md, AppSpacing.xxl),
-                        itemCount: videos.length,
+                        itemCount: selected.length,
                         separatorBuilder: (_, _) =>
                             const SizedBox(height: AppSpacing.sm),
-                        itemBuilder: (_, i) => _VideoTile(video: videos[i]),
+                        itemBuilder: (_, i) => _VideoTile(video: selected[i]),
                       );
                     },
                   ),
                 ),
               ],
             ),
+    );
+  }
+}
+
+class _PeriodSelector extends StatelessWidget {
+  const _PeriodSelector({required this.selected, required this.onChanged});
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<int>(
+        segments: const [
+          ButtonSegment(value: 0, label: Text('Today')),
+          ButtonSegment(value: 1, label: Text('Last week')),
+          ButtonSegment(value: 2, label: Text('This month')),
+        ],
+        selected: {selected},
+        showSelectedIcon: false,
+        style: ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          textStyle: WidgetStatePropertyAll(
+            Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        onSelectionChanged: (s) => onChanged(s.first),
+      ),
     );
   }
 }
@@ -183,24 +241,6 @@ class _VideoTile extends StatelessWidget {
                     color: AppColors.textMuted, fontSize: 11)),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _InfoBanner extends StatelessWidget {
-  const _InfoBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: AppColors.primaryLight,
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-      child: const Text(
-        'Captured from the video title shown while watching in the YouTube app.',
-        style: TextStyle(color: AppColors.primaryDark, fontSize: 12),
       ),
     );
   }

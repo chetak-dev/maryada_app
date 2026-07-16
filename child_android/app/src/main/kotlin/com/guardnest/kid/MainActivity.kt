@@ -284,7 +284,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, 0, 0)
             addView(TextView(this@MainActivity).apply {
-                text = "GuardNest"
+                text = "Maryada"
                 setTextColor(Color.WHITE)
                 textSize = 22f
                 typeface = Typeface.DEFAULT_BOLD
@@ -357,7 +357,7 @@ class MainActivity : Activity() {
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDEAB", "App blocking",
-            "Turn on GuardNest in Accessibility so blocked apps can be stopped.",
+            "Turn on Maryada in Accessibility so blocked apps can be stopped.",
             hasAccessibility()
         ) { grantAccessibility() })
         col.addView(gap(dp(10)))
@@ -369,7 +369,7 @@ class MainActivity : Activity() {
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDEE1", "Prevent removal",
-            "Activate device admin so GuardNest can’t be removed without a parent.",
+            "Activate device admin so Maryada can’t be removed without a parent.",
             hasDeviceAdmin()
         ) { grantDeviceAdmin() })
 
@@ -505,7 +505,7 @@ class MainActivity : Activity() {
             .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, DeviceLockdown.admin(this))
             .putExtra(
                 DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                "Activate so GuardNest can’t be removed without a parent.",
+                "Activate so Maryada can’t be removed without a parent.",
             )
         try {
             startActivity(intent)
@@ -733,7 +733,7 @@ class MainActivity : Activity() {
             .setTitle("Temporary Access")
             .setMessage(
                 "This turns off app monitoring so you can use a banking app.\n\n" +
-                    "Every other app will be locked until you turn GuardNest’s " +
+                    "Every other app will be locked until you turn Maryada’s " +
                     "Accessibility back on in Settings. Continue?"
             )
             .setPositiveButton("Continue") { _, _ ->

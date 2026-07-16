@@ -26,8 +26,8 @@ class _ActivityScreenState extends State<ActivityScreen> {
   @override
   Widget build(BuildContext context) {
     final title = widget.childName == null
-        ? 'Activity'
-        : 'Activity · ${widget.childName}';
+        ? 'Website Visits'
+        : 'Website Visits · ${widget.childName}';
 
     return Scaffold(
       appBar: AppBar(title: Text(title)),
@@ -86,15 +86,23 @@ class _AlertTile extends StatelessWidget {
   }
 }
 
-class _WebHistorySection extends StatelessWidget {
+class _WebHistorySection extends StatefulWidget {
   const _WebHistorySection({required this.familyId, required this.childId});
   final String familyId;
   final String childId;
 
   @override
+  State<_WebHistorySection> createState() => _WebHistorySectionState();
+}
+
+class _WebHistorySectionState extends State<_WebHistorySection> {
+  int _period = 0; // 0 = Today, 1 = Last week, 2 = This month
+
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<WebHistory>(
-      stream: WebHistoryRepository.instance.watch(familyId, childId),
+      stream: WebHistoryRepository.instance
+          .watch(widget.familyId, widget.childId),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Padding(
@@ -103,16 +111,35 @@ class _WebHistorySection extends StatelessWidget {
           );
         }
         final history = snap.data ?? const WebHistory();
+        final now = DateTime.now();
+        final startOfToday = DateTime(now.year, now.month, now.day);
+        final weekAgo = now.subtract(const Duration(days: 7));
+        bool isToday(WebVisit v) => v.at != null && !v.at!.isBefore(startOfToday);
+        bool isLastWeek(WebVisit v) =>
+            v.at != null && v.at!.isBefore(startOfToday) && v.at!.isAfter(weekAgo);
+        final visitedToday = history.visited.where(isToday).toList();
+        final visitedWeek = history.visited.where(isLastWeek).toList();
+        final visitedMonth = history.visited
+            .where((v) => !isToday(v) && !isLastWeek(v))
+            .toList();
+        final selected =
+            [visitedToday, visitedWeek, visitedMonth][_period];
+        final emptyText =
+            ['None today.', 'None this week.', 'None earlier.'][_period];
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text('Websites visited',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: AppSpacing.sm),
+            _PeriodSelector(
+              selected: _period,
+              onChanged: (i) => setState(() => _period = i),
+            ),
+            const SizedBox(height: AppSpacing.sm),
             _DomainCard(
-              domains: history.visited,
-              emptyText:
-                  'No sites yet. Web history is recorded while the web filter is on.',
+              domains: selected,
+              emptyText: emptyText,
               blocked: false,
             ),
             const SizedBox(height: AppSpacing.lg),
@@ -127,6 +154,35 @@ class _WebHistorySection extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _PeriodSelector extends StatelessWidget {
+  const _PeriodSelector({required this.selected, required this.onChanged});
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: SegmentedButton<int>(
+        segments: const [
+          ButtonSegment(value: 0, label: Text('Today')),
+          ButtonSegment(value: 1, label: Text('Last week')),
+          ButtonSegment(value: 2, label: Text('This month')),
+        ],
+        selected: {selected},
+        showSelectedIcon: false,
+        style: ButtonStyle(
+          visualDensity: VisualDensity.compact,
+          textStyle: WidgetStatePropertyAll(
+            Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
+        onSelectionChanged: (s) => onChanged(s.first),
+      ),
     );
   }
 }

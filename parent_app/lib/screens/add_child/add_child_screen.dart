@@ -185,8 +185,8 @@ class _AddChildScreenState extends State<AddChildScreen> {
             const SizedBox(height: AppSpacing.sm),
             const _Step(
               n: 1,
-              title: 'Install GuardNest Kid',
-              body: 'Put the GuardNest Kid app on the child’s Android device.',
+              title: 'Install Maryada',
+              body: 'Put the Maryada app on the child’s Android device.',
             ),
             const _Step(
               n: 2,

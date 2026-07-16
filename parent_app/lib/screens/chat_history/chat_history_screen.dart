@@ -42,7 +42,6 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
       appBar: AppBar(title: Text('Chats · ${widget.childName}')),
       body: Column(
         children: [
-          const _InfoBanner(),
           _SearchBox(
             controller: _searchCtrl,
             onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
@@ -410,24 +409,6 @@ class _Bubble extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _InfoBanner extends StatelessWidget {
-  const _InfoBanner();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: AppColors.primaryLight,
-      padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-      child: const Text(
-        'WhatsApp messages captured on-screen and from notifications — grouped by chat.',
-        style: TextStyle(color: AppColors.primaryDark, fontSize: 12),
       ),
     );
   }

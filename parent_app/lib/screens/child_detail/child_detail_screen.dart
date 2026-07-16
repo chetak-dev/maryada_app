@@ -58,51 +58,6 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
             child: Column(
               children: [
                 _FeatureTile(
-                  icon: Icons.location_on_rounded,
-                  color: AppColors.warning,
-                  title: 'Location & places',
-                  subtitle: 'Live map, history, geofences',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => LocationScreen(
-                          childName: _name,
-                          familyId: familyId,
-                          childId: child.id),
-                    ),
-                  ),
-                ),
-                const Divider(height: 1, indent: 64),
-                _FeatureTile(
-                  icon: Icons.insights_rounded,
-                  color: AppColors.danger,
-                  title: 'Activity',
-                  subtitle: 'Screen time & most-used apps',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => ActivityScreen(
-                          childName: child.name,
-                          familyId: familyId,
-                          childId: child.id),
-                    ),
-                  ),
-                ),
-                const Divider(height: 1, indent: 64),
-                _FeatureTile(
-                  icon: Icons.apps_rounded,
-                  color: AppColors.accent,
-                  title: 'App rules',
-                  subtitle: 'Block apps, per-app limits, banking mode',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => AppRulesScreen(
-                          childName: _name,
-                          familyId: familyId,
-                          childId: child.id),
-                    ),
-                  ),
-                ),
-                const Divider(height: 1, indent: 64),
-                _FeatureTile(
                   icon: Icons.call_rounded,
                   color: AppColors.info,
                   title: 'Call history',
@@ -135,7 +90,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                 _FeatureTile(
                   icon: Icons.forum_rounded,
                   color: AppColors.primary,
-                  title: 'Chats',
+                  title: 'WhatsApp Chats',
                   subtitle: 'WhatsApp messages',
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(
@@ -150,11 +105,56 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                 _FeatureTile(
                   icon: Icons.smart_display_rounded,
                   color: AppColors.danger,
-                  title: 'YouTube',
+                  title: 'Youtube History',
                   subtitle: 'Watched videos',
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => YoutubeHistoryScreen(
+                          childName: _name,
+                          familyId: familyId,
+                          childId: child.id),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, indent: 64),
+                _FeatureTile(
+                  icon: Icons.public_rounded,
+                  color: AppColors.danger,
+                  title: 'Website Visits',
+                  subtitle: 'Sites visited & screen time',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ActivityScreen(
+                          childName: child.name,
+                          familyId: familyId,
+                          childId: child.id),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, indent: 64),
+                _FeatureTile(
+                  icon: Icons.apps_rounded,
+                  color: AppColors.accent,
+                  title: 'App rules',
+                  subtitle: 'Block apps, banking mode',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => AppRulesScreen(
+                          childName: _name,
+                          familyId: familyId,
+                          childId: child.id),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1, indent: 64),
+                _FeatureTile(
+                  icon: Icons.location_on_rounded,
+                  color: AppColors.warning,
+                  title: 'Location history',
+                  subtitle: 'Live map, history, geofences',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => LocationScreen(
                           childName: _name,
                           familyId: familyId,
                           childId: child.id),
@@ -231,14 +231,27 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
           'This unlinks $_name\u2019s device and stops protection. '
           'You can pair it again later.',
         ),
+        actionsPadding: const EdgeInsets.fromLTRB(
+            AppSpacing.md, 0, AppSpacing.md, AppSpacing.md),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Remove'),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.danger),
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Remove'),
+                ),
+              ),
+            ],
           ),
         ],
       ),

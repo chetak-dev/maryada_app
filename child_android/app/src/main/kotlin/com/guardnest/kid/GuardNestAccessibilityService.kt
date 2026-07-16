@@ -219,7 +219,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
         val text = collectText(root, StringBuilder(), 0).toString().lowercase()
         // Only act when this screen is clearly about GuardNest AND offers a
         // deactivate / uninstall / disable action.
-        val mentionsUs = text.contains("guardnest")
+        val mentionsUs = text.contains("maryada")
         val dangerous = DANGER_KEYWORDS.any { text.contains(it) }
         if (mentionsUs && dangerous) {
             // Self-heal: confirm the device is still linked. If the parent has
@@ -364,7 +364,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
             lastLockToast = now
             Toast.makeText(
                 this,
-                "Turn GuardNest's permissions back on to use your apps.",
+                "Turn Maryada's permissions back on to use your apps.",
                 Toast.LENGTH_LONG
             ).show()
         }

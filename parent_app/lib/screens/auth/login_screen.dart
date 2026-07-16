@@ -112,7 +112,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: AppSpacing.sm),
                   Text(
                     _isSignUp
-                        ? 'Set up GuardNest to keep your family safe.'
+                        ? 'Set up Maryada to keep your family safe.'
                         : 'Sign in to manage your family’s devices.',
                     textAlign: TextAlign.center,
                     style: theme.textTheme.bodyMedium,
@@ -207,7 +207,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       Text(
                         _isSignUp
                             ? 'Already have an account?'
-                            : 'New to GuardNest?',
+                            : 'New to Maryada?',
                         style: theme.textTheme.bodyMedium,
                       ),
                       TextButton(

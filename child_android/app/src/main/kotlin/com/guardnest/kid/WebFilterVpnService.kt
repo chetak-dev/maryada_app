@@ -62,7 +62,7 @@ class WebFilterVpnService : VpnService() {
             .apply { isDaemon = true }.start()
         attachRules()
         val builder = Builder()
-            .setSession("GuardNest web filter")
+            .setSession("Maryada web filter")
             .addAddress("10.111.222.1", 24)
             .addDnsServer(VIRTUAL_DNS)
             .addRoute(VIRTUAL_DNS, 32)
