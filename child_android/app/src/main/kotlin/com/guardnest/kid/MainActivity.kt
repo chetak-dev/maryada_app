@@ -106,6 +106,7 @@ class MainActivity : Activity() {
     private var linking = false
     private lateinit var unlinkButton: TextView
     private var unlinking = false
+    private var tempAccessBtn: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -222,6 +223,9 @@ class MainActivity : Activity() {
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(28))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+            )
         }
 
         if (!permissionsComplete()) {
@@ -231,6 +235,16 @@ class MainActivity : Activity() {
             body.addView(buildStatusCard())
             body.addView(gap(dp(16)))
             body.addView(buildPairingCard())
+            if (ChildStore.isPaired(this)) {
+                body.addView(gap(dp(12)))
+                body.addView(buildTemporaryAccessButton())
+            }
+            // Flexible spacer pushes the unlink button to the very bottom.
+            body.addView(View(this).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+                )
+            })
             body.addView(gap(dp(12)))
             body.addView(buildUnlinkButton())
         }
@@ -297,16 +311,6 @@ class MainActivity : Activity() {
         checkSelfPermission(Manifest.permission.READ_SMS) ==
             PackageManager.PERMISSION_GRANTED
 
-    private fun hasNotificationAccess(): Boolean {
-        val enabled = Settings.Secure.getString(
-            contentResolver, "enabled_notification_listeners"
-        ) ?: return false
-        val cn = android.content.ComponentName(
-            this, GuardNestNotificationListener::class.java
-        ).flattenToString()
-        return enabled.split(':').any { it.equals(cn, ignoreCase = true) }
-    }
-
     private fun hasVpnConsent() = VpnService.prepare(this) == null
 
     private fun hasBatteryExemption(): Boolean {
@@ -333,23 +337,6 @@ class MainActivity : Activity() {
     private fun buildSetupGate(): View {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        val intro = card()
-        intro.addView(TextView(this).apply {
-            text = "Finish setup"
-            textSize = 18f
-            setTextColor(cInk)
-            typeface = Typeface.DEFAULT_BOLD
-        })
-        intro.addView(TextView(this).apply {
-            text = "Turn on each item below so protection can work. " +
-                "Items marked optional can be skipped."
-            textSize = 13f
-            setTextColor(cMuted)
-            setPadding(0, dp(4), 0, 0)
-        })
-        col.addView(intro)
-        col.addView(gap(dp(14)))
-
         col.addView(permissionRow(
             "\uD83D\uDCCA", "Usage access",
             "Lets your family see screen time and app usage.",
@@ -357,22 +344,10 @@ class MainActivity : Activity() {
         ) { grantUsage() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
-            "\uD83D\uDCDE", "Call history",
-            "Lets your family review recent calls.",
-            hasCallLog()
-        ) { grantCallLog() })
-        col.addView(gap(dp(10)))
-        col.addView(permissionRow(
-            "\uD83D\uDCAC", "Text messages",
-            "Lets your family review SMS messages.",
-            hasSms()
-        ) { grantSms() })
-        col.addView(gap(dp(10)))
-        col.addView(permissionRow(
-            "\uD83D\uDCE9", "Chat messages",
-            "Read message notifications (WhatsApp, etc.) for your family.",
-            hasNotificationAccess()
-        ) { grantNotificationAccess() })
+            "\uD83D\uDCDE", "Calls & messages",
+            "Lets your family review recent calls and SMS messages.",
+            hasCallLog() && hasSms()
+        ) { grantCallsAndMessages() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDD0B", "Keep protection running",
@@ -476,29 +451,19 @@ class MainActivity : Activity() {
         return c
     }
 
-    private fun grantCallLog() {
-        if (!hasCallLog()) {
-            requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 3)
-        }
-    }
-
-    private fun grantSms() {
-        if (!hasSms()) {
-            requestPermissions(arrayOf(Manifest.permission.READ_SMS), 4)
+    /** Requests call log and SMS together in a single system prompt. */
+    private fun grantCallsAndMessages() {
+        val needed = mutableListOf<String>()
+        if (!hasCallLog()) needed.add(Manifest.permission.READ_CALL_LOG)
+        if (!hasSms()) needed.add(Manifest.permission.READ_SMS)
+        if (needed.isNotEmpty()) {
+            requestPermissions(needed.toTypedArray(), 3)
         }
     }
 
     private fun grantUsage() {
         UsageReporter.openSettings(this)
         armGrantWatch { hasUsageAccess() }
-    }
-
-    private fun grantNotificationAccess() {
-        try {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-            armGrantWatch { hasNotificationAccess() }
-        } catch (_: Exception) {
-        }
     }
 
     private fun grantBattery() {
@@ -641,15 +606,28 @@ class MainActivity : Activity() {
         })
 
         codeInput = EditText(this).apply {
-            hint = "6-character code"
+            // Smaller hint so "Enter pairing code" fits the box, while the typed
+            // code still shows large.
+            hint = android.text.SpannableString("Enter pairing code").apply {
+                setSpan(
+                    android.text.style.RelativeSizeSpan(0.8f),
+                    0, length,
+                    android.text.Spanned.SPAN_INCLUSIVE_INCLUSIVE
+                )
+            }
             setHintTextColor(Color.parseColor("#94A3B8"))
             setTextColor(cInk)
-            textSize = 20f
+            textSize = 22f
             gravity = Gravity.CENTER
-            letterSpacing = 0.25f
+            letterSpacing = 0.2f
             typeface = Typeface.MONOSPACE
-            inputType = InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-            setPadding(dp(16), dp(16), dp(16), dp(16))
+            inputType = InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS or
+                InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+            filters = arrayOf(
+                android.text.InputFilter.LengthFilter(6),
+                android.text.InputFilter.AllCaps(),
+            )
+            setPadding(dp(16), dp(18), dp(16), dp(18))
             background = rounded(Color.parseColor("#F8FAFC"), dp(12), cBorder, dp(1))
         }
         pairingCard.addView(codeInput)
@@ -706,6 +684,80 @@ class MainActivity : Activity() {
         linkButton.alpha = if (loading) 0.6f else 1f
         linkProgress.visibility = if (loading) View.VISIBLE else View.GONE
         linkLabel.text = if (loading) "Linking\u2026" else "Link device"
+    }
+
+    /**
+     * A prominent "Temporary Access" button. Turns off ONLY the accessibility
+     * permission so a strict banking app can run; the lockbox then keeps every
+     * other app locked until the child turns Accessibility back on.
+     */
+    private fun buildTemporaryAccessButton(): View {
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val btn = TextView(this).apply {
+            text = "Request Temporary Access"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(15), dp(16), dp(15))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                intArrayOf(Color.parseColor("#F59E0B"), Color.parseColor("#D97706"))
+            ).apply { cornerRadius = dp(14).toFloat() }
+            isClickable = true
+            setOnClickListener { onTemporaryAccess() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        tempAccessBtn = btn
+        col.addView(btn)
+        col.addView(TextView(this).apply {
+            text = "Use a banking app for a while. All other apps stay locked " +
+                "until protection is turned back on."
+            textSize = 12f
+            setTextColor(cMuted)
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(8), dp(8), 0)
+        })
+        return col
+    }
+
+    /**
+     * Confirms, then turns off the accessibility service. The device drops into
+     * banking mode (lockbox) — only the parent's allow-list stays usable.
+     */
+    private fun onTemporaryAccess() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Temporary Access")
+            .setMessage(
+                "This turns off app monitoring so you can use a banking app.\n\n" +
+                    "Every other app will be locked until you turn GuardNest’s " +
+                    "Accessibility back on in Settings. Continue?"
+            )
+            .setPositiveButton("Continue") { _, _ ->
+                // Prevent a second tap.
+                tempAccessBtn?.apply {
+                    isClickable = false
+                    isEnabled = false
+                    alpha = 0.6f
+                    text = "Temporary access on…"
+                }
+                // Turn off accessibility in the background.
+                if (!AccessibilityController.disable()) {
+                    // Fallback: open the accessibility screen to toggle it off.
+                    try {
+                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    } catch (_: Exception) {
+                    }
+                }
+                // Take the child to the permission screen once the change
+                // propagates (accessibility now shows as missing).
+                uiHandler.postDelayed({ render() }, 500)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     /**

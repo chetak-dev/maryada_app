@@ -9,6 +9,11 @@ class AppRule {
   bool blocked;
   int dailyLimitMinutes;
 
+  /// Family-wide: this app stays usable while a child has a protection turned
+  /// off ("banking mode"), so strict banking/UPI apps can run. Applies to all
+  /// children.
+  bool bankingAllowed;
+
   /// Names of the children who have this app installed (family view only).
   final List<String> owners;
 
@@ -18,6 +23,7 @@ class AppRule {
     required this.color,
     this.blocked = false,
     this.dailyLimitMinutes = 0,
+    this.bankingAllowed = false,
     this.owners = const [],
   });
 

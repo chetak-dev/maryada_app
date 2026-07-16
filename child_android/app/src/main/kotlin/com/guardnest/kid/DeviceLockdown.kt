@@ -49,9 +49,72 @@ object DeviceLockdown {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 dpm.addUserRestriction(admin, UserManager.DISALLOW_REMOVE_USER)
             }
-            return "Protection ON — app can’t be uninstalled; factory reset & safe mode disabled."
+            // Block cloned / parallel / dual apps: they run in a separate user
+            // profile our per-user enforcement can't see, so a child could hide a
+            // blocked app there. Prevent new managed/clone profiles, and remove
+            // any secondary users that already exist.
+            dpm.addUserRestriction(admin, UserManager.DISALLOW_ADD_MANAGED_PROFILE)
+            if (Build.VERSION.SDK_INT >= 34) {
+                // UserManager.DISALLOW_ADD_CLONE_PROFILE (API 34+).
+                dpm.addUserRestriction(admin, "no_add_clone_profile")
+            }
+            removeSecondaryUsers(ctx)
+            disableIncognito(ctx)
+            return "Protection ON — app can’t be uninstalled; factory reset, safe mode & app cloning disabled."
         } catch (e: SecurityException) {
             return "Failed to apply protection: ${e.message}"
+        }
+    }
+
+    /** Chromium browsers that honour the IncognitoModeAvailability managed key. */
+    private val INCOGNITO_BROWSERS = listOf(
+        "com.android.chrome",
+        "com.chrome.beta",
+        "com.chrome.dev",
+        "com.microsoft.emmx",   // Edge
+        "com.brave.browser",
+        "com.brave.browser_beta",
+    )
+
+    /**
+     * Disables incognito / private browsing in supported browsers via the
+     * managed-configuration channel (Device Owner only; no-ops otherwise).
+     * `IncognitoModeAvailability = 1` means "Disabled", so the browser hides the
+     * "New incognito tab" option entirely — no private browsing to miss.
+     */
+    fun disableIncognito(ctx: Context) {
+        if (!isDeviceOwner(ctx)) return
+        val dpm = dpm(ctx)
+        val admin = admin(ctx)
+        for (pkg in INCOGNITO_BROWSERS) {
+            try {
+                val restrictions = android.os.Bundle().apply {
+                    putInt("IncognitoModeAvailability", 1)
+                }
+                dpm.setApplicationRestrictions(admin, pkg, restrictions)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Removes any existing secondary users (Device Owner only) — e.g. an OEM
+     * "second space" a child could use to run un-monitored copies of apps. Best
+     * effort; OEM parallel-app profiles that aren't standard secondary users may
+     * not be removable via the public API.
+     */
+    private fun removeSecondaryUsers(ctx: Context) {
+        val dpm = dpm(ctx)
+        val admin = admin(ctx)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        try {
+            for (user in dpm.getSecondaryUsers(admin)) {
+                try {
+                    dpm.removeUser(admin, user)
+                } catch (_: Exception) {
+                }
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -67,6 +130,10 @@ object DeviceLockdown {
             dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADD_USER)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 dpm.clearUserRestriction(admin, UserManager.DISALLOW_REMOVE_USER)
+            }
+            dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADD_MANAGED_PROFILE)
+            if (Build.VERSION.SDK_INT >= 34) {
+                dpm.clearUserRestriction(admin, "no_add_clone_profile")
             }
             return "Protection OFF — app can be uninstalled again."
         } catch (e: SecurityException) {

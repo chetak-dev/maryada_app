@@ -3,6 +3,7 @@ package com.guardnest.kid
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Build
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
@@ -12,6 +13,35 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+
+/**
+ * Lets the app UI ask the running accessibility service to turn itself off —
+ * used by the "Temporary Access" button, which drops only the accessibility
+ * permission so a strict banking app can run. When it's off, [EnforcementService]
+ * locks the device down to the parent's allow-list until it's turned back on.
+ */
+object AccessibilityController {
+    @Volatile
+    var service: android.accessibilityservice.AccessibilityService? = null
+
+    fun isRunning(): Boolean = service != null
+
+    /** Turns off GuardNest's accessibility service. Returns true if it acted. */
+    fun disable(): Boolean {
+        val s = service ?: return false
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                s.disableSelf()
+                service = null
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+}
 
 /**
  * Jobs, all without Device Owner:
@@ -33,6 +63,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
     private var lastPairingVerify = 0L
     private var lastLockToast = 0L
     private var lastBlockToast = 0L
+    private var lastBrowserToast = 0L
     private var lastShot = 0L
     @Volatile private var shotInFlight = false
     // YouTube watch-time tracking (current video + last capture time).
@@ -48,6 +79,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
 
         // Anti-tamper first: block deactivate-admin / uninstall of GuardNest.
         if (guardTamperScreens(pkg)) return
+
+        // Then block reaching any app's "App info" / "Uninstall" screen (the
+        // dangerous long-press options) — the child must ask the parent instead.
+        if (guardAppManagementScreens(pkg, type)) return
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             ForegroundApp.set(pkg)
@@ -66,10 +101,30 @@ class GuardNestAccessibilityService : AccessibilityService() {
                 }
                 return
             }
+            // Only one browser allowed: bounce out of any other browser, so no
+            // browser's private/incognito mode can be used. Safe browsing locks
+            // the child to Chrome (the approved browser).
+            if (pkg != packageName && WebFilter.shouldLockOtherBrowsers() &&
+                ForegroundApp.isBrowser(pkg) &&
+                pkg != WebFilter.effectiveApprovedBrowser()
+            ) {
+                performGlobalAction(GLOBAL_ACTION_HOME)
+                val now = System.currentTimeMillis()
+                if (now - lastBrowserToast > 2000) {
+                    lastBrowserToast = now
+                    Toast.makeText(
+                        this,
+                        "This browser is blocked. Use the one your parent approved.",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return
+            }
         }
 
         // For a browser, read the address bar and record the visited site.
         if (pkg != packageName && ForegroundApp.isBrowserForeground()) {
+            if (guardIncognito()) return
             captureBrowserUrl(pkg)
         }
 
@@ -222,6 +277,61 @@ class GuardNestAccessibilityService : AccessibilityService() {
             collectText(node.getChild(i), out, depth + 1)
         }
         return out
+    }
+
+    private var lastContactToast = 0L
+
+    /**
+     * Blocks the child from reaching any app's "App info" or "Uninstall" screen
+     * (the dangerous options from a long-press on an app icon). Instead of
+     * letting them uninstall / force-stop / clear data, GuardNest bounces them
+     * out and tells them to ask the parent. Requires the accessibility service.
+     *
+     * Returns true if it acted (the event is consumed).
+     */
+    private fun guardAppManagementScreens(pkg: String, type: Int): Boolean {
+        if (!ChildStore.isPaired(this)) return false
+        val isUninstaller = pkg.contains("packageinstaller")
+        val isSettings = pkg.contains("settings")
+        val isLauncher = pkg.contains("launcher") ||
+            pkg.endsWith(".home") ||
+            pkg.contains("trebuchet")
+        if (!isUninstaller && !isSettings && !isLauncher) return false
+        // For the launcher, only inspect when a new window/popup appears (the
+        // long-press menu), not on every home-screen content change.
+        if (isLauncher && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            return false
+        }
+
+        val root = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        val text = collectText(root, StringBuilder(), 0).toString().lowercase()
+
+        // The uninstall confirmation clearly says "uninstall"; the Settings
+        // app-info page and the launcher long-press menu show a cluster of app
+        // actions (app info / uninstall / force stop / …). Require two markers
+        // to avoid catching unrelated Settings or home screens.
+        val isAppManagement = if (isUninstaller) {
+            text.contains("uninstall")
+        } else {
+            APP_INFO_MARKERS.count { text.contains(it) } >= 2
+        }
+        if (!isAppManagement) return false
+
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        val now = System.currentTimeMillis()
+        if (now - lastContactToast > 2000) {
+            lastContactToast = now
+            Toast.makeText(
+                this,
+                "Ask your parent to change or remove apps.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        return true
     }
 
     /**
@@ -482,6 +592,67 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
     }
 
+    private var lastIncognitoAction = 0L
+
+    /**
+     * Best-effort incognito/private-browsing block for devices that aren't
+     * Device Owner (on Device Owner, incognito is disabled outright via a
+     * managed config, so this never triggers). Detects the incognito indicator
+     * and bounces the child out. Returns true if it acted.
+     */
+    private fun guardIncognito(): Boolean {
+        if (!ChildStore.isPaired(this)) return false
+        val now = System.currentTimeMillis()
+        if (now - lastIncognitoAction < 1500) return false
+        val root = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        if (!isIncognito(root)) return false
+        lastIncognitoAction = now
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        Toast.makeText(
+            this,
+            "Incognito browsing isn’t allowed. Ask your parent.",
+            Toast.LENGTH_LONG
+        ).show()
+        return true
+    }
+
+    /**
+     * Detects an incognito/private session from the browser UI: the toolbar's
+     * "incognito" indicator (content description) or the private New-Tab page
+     * text. Bounded scan; precise markers to avoid false positives from page
+     * content.
+     */
+    private fun isIncognito(root: AccessibilityNodeInfo): Boolean {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var scanned = 0
+        while (queue.isNotEmpty() && scanned < 300) {
+            val node = queue.removeFirst()
+            scanned++
+            // The toolbar's incognito/private badge has a SHORT content
+            // description ("Incognito"). Match it exactly so the "New incognito
+            // tab" MENU ITEM (which merely offers it) doesn't count.
+            val cd = node.contentDescription?.toString()?.trim()?.lowercase()
+            if (cd != null && cd in INCOGNITO_BADGES) {
+                return true
+            }
+            // The private/incognito New-Tab page shows a distinctive sentence
+            // that never appears in a menu.
+            val t = node.text?.toString()?.lowercase()
+            if (t != null && PRIVATE_MARKERS.any { t.contains(it) }) {
+                return true
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return false
+    }
+
     /** Reads the browser's URL/omnibox field and records the host it shows. */
     private fun captureBrowserUrl(pkg: String) {
         val root = try {
@@ -490,6 +661,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
             null
         } ?: return
         try {
+            // 1) Fast path: the browser's known URL-bar resource id.
             for (id in URL_BAR_IDS) {
                 val viewId = if (id.contains(":")) id else "$pkg:id/$id"
                 val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
@@ -503,8 +675,49 @@ class GuardNestAccessibilityService : AccessibilityService() {
                     }
                 }
             }
+            // 2) Generic fallback (browsers we don't have an id for, or a
+            //    collapsed omnibox): find a URL-like node in the top toolbar.
+            val host = findUrlLikeHost(root)
+            if (host != null) {
+                WebHistoryStore.recordVisit(host)
+                enforceWebFilter(host)
+            }
         } catch (_: Exception) {
         }
+    }
+
+    /**
+     * Scans the view tree for a node whose text looks like a web address,
+     * preferring the editable omnibox or a node in the top toolbar (so we don't
+     * mistake an on-page link for the visited site). Bounded for performance.
+     */
+    private fun findUrlLikeHost(root: AccessibilityNodeInfo): String? {
+        val toolbarBottom = resources.displayMetrics.heightPixels * 0.18
+        var fallback: String? = null
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var scanned = 0
+        val rect = Rect()
+        while (queue.isNotEmpty() && scanned < 400) {
+            val node = queue.removeFirst()
+            scanned++
+            val text = node.text?.toString()
+            if (!text.isNullOrBlank() && !text.contains(' ')) {
+                val host = hostOf(text)
+                if (host != null) {
+                    node.getBoundsInScreen(rect)
+                    // The omnibox is editable or sits in the top toolbar.
+                    if (node.isEditable || rect.top <= toolbarBottom) {
+                        return host
+                    }
+                    if (fallback == null) fallback = host
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return fallback
     }
 
     /** Blocks the page (leaves the site) when the address-bar host is filtered. */
@@ -534,6 +747,21 @@ class GuardNestAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        AccessibilityController.service = this
+    }
+
+    override fun onDestroy() {
+        AccessibilityController.service = null
+        super.onDestroy()
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        AccessibilityController.service = null
+        return super.onUnbind(intent)
+    }
 
     private companion object {
         /** YouTube app packages: official plus the common Vanced/ReVanced forks. */
@@ -615,6 +843,31 @@ class GuardNestAccessibilityService : AccessibilityService() {
         val DANGER_KEYWORDS = listOf(
             "deactivate", "uninstall", "device admin", "device administrator",
             "turn off", "disable", "remove", "force stop",
+        )
+
+        /** Exact toolbar badge content-descriptions shown ONLY in an active
+         *  private/incognito tab (not in menus). */
+        val INCOGNITO_BADGES = setOf(
+            "incognito", "private", "private tab", "secret mode",
+        )
+
+        /** Sentences that appear only on a private/incognito New-Tab page —
+         *  never in a menu — so we detect a real private session, not the
+         *  "New incognito tab" menu item. */
+        val PRIVATE_MARKERS = listOf(
+            "you’ve gone incognito", "you've gone incognito",
+            "you have gone incognito",
+            "you’re browsing privately", "you're browsing privately",
+            "you’re in a private", "you're in a private",
+            "now you can browse privately", "you can browse privately",
+            "you are browsing privately",
+        )
+
+        /** Markers of the Settings "App info" page (any app). Two+ ⇒ app-info. */
+        val APP_INFO_MARKERS = listOf(
+            "uninstall", "force stop", "app info", "app details",
+            "storage & cache", "storage and cache", "clear data",
+            "clear storage", "open by default", "disable app",
         )
     }
 }

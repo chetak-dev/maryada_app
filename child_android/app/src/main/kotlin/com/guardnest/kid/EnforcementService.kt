@@ -5,6 +5,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -65,7 +67,8 @@ class EnforcementService : Service() {
                 reportSmsHistory()
                 reportMessages()
                 reportYoutubeHistory()
-                promptForMissingPermissions()
+                enforceLockbox()
+                checkForUpdate()
             } catch (_: Throwable) {
                 // Ignore — always reschedule below.
             } finally {
@@ -85,6 +88,7 @@ class EnforcementService : Service() {
         DeviceLockdown.applyTamperProtection(this)
         reportInstalledApps()
         handler.post(tick)
+        handler.post(lockGuard)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -95,6 +99,7 @@ class EnforcementService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        handler.removeCallbacks(lockGuard)
         listener?.remove()
         appRulesListener?.remove()
         webFilterListener?.remove()
@@ -161,6 +166,7 @@ class EnforcementService : Service() {
     /** Clears local pairing, stops the filter, and shuts the service down. */
     private fun unpair() {
         handler.removeCallbacks(tick)
+        handler.removeCallbacks(lockGuard)
         listener?.remove()
         appRulesListener?.remove()
         webFilterListener?.remove()
@@ -207,13 +213,14 @@ class EnforcementService : Service() {
             else
                 "It’s bedtime. Your device is resting."
             LockOverlay.show(this, title, subtitle)
-        } else {
+        } else if (!ChildStore.lockboxActive(this)) {
+            // Don't hide the lock overlay while lockbox owns it — the fast guard
+            // (guardForeground) manages it per foreground app in that state.
             LockOverlay.hide(this)
         }
     }
 
     private var lastHeartbeat = 0L
-
     /** Periodically tells the parent this device is online (throttled). */
     private fun heartbeat() {
         val now = System.currentTimeMillis()
@@ -228,6 +235,11 @@ class EnforcementService : Service() {
                 mapOf(
                     "online" to true,
                     "lastSeenAt" to FieldValue.serverTimestamp(),
+                    // Live protection status, so the parent always knows whether
+                    // monitoring is intact — even between the once-in-a-few-days
+                    // check-ins. permissionsOk was previously only set at pairing.
+                    "protections" to protectionsMap(),
+                    "permissionsOk" to Permissions.allGranted(this),
                 ),
                 SetOptions.merge()
             )
@@ -241,8 +253,35 @@ class EnforcementService : Service() {
             }
     }
 
+    /** Live grant state of each required protection (true == granted). */
+    private fun protectionsMap(): Map<String, Boolean> = mapOf(
+        "accessibility" to Permissions.hasAccessibility(this),
+        "usageAccess" to Permissions.hasUsageAccess(this),
+        "callLog" to Permissions.hasCallLog(this),
+        "sms" to Permissions.hasSms(this),
+        "battery" to Permissions.hasBatteryExemption(this),
+        "deviceAdmin" to Permissions.hasDeviceAdmin(this),
+        "overlay" to Permissions.hasOverlay(this),
+    )
+
+    private fun offProtections(): List<String> =
+        protectionsMap().filterValues { !it }.keys.toList()
+
     private var lastLocationReport = 0L
     private var lastLocationHistory = 0L
+    // Last place written to the history trail, so we only append a new point
+    // when the child has actually moved to a different location.
+    @Volatile private var lastHistoryLat: Double? = null
+    @Volatile private var lastHistoryLng: Double? = null
+    private var lastUpdateCheck = 0L
+
+    /** Periodically checks for a remotely-published app update (OTA). */
+    private fun checkForUpdate() {
+        val now = System.currentTimeMillis()
+        if (now - lastUpdateCheck < UPDATE_CHECK_MS) return
+        lastUpdateCheck = now
+        AppUpdater.checkAndUpdate(this)
+    }
 
     /**
      * Reports the device's location to the parent (throttled). Uses the
@@ -327,11 +366,14 @@ class EnforcementService : Service() {
             if (address != null) current["address"] = address
             childRef.set(current, SetOptions.merge())
 
-            // Append to the history trail at most once every 30 minutes so it
-            // stays a coarse timeline rather than a dense stream of points.
+            // Append to the history trail only when the child is at a NEW place
+            // (so staying put doesn't fill the trail with duplicates), and at
+            // most once every 30 minutes so it stays a coarse timeline.
             val now = System.currentTimeMillis()
-            if (now - lastLocationHistory >= LOCATION_HISTORY_MS) {
+            if (now - lastLocationHistory >= LOCATION_HISTORY_MS && isNewPlace(lat, lng)) {
                 lastLocationHistory = now
+                lastHistoryLat = lat
+                lastHistoryLng = lng
                 val point = hashMapOf<String, Any>(
                     "lat" to lat,
                     "lng" to lng,
@@ -342,6 +384,19 @@ class EnforcementService : Service() {
                 childRef.collection("locationHistory").add(point)
             }
         }.start()
+    }
+
+    /**
+     * True if this fix is far enough from the last recorded history point to be
+     * a distinct place (or if nothing has been recorded yet). Filters out GPS
+     * jitter and "sitting still" so only unique locations are kept.
+     */
+    private fun isNewPlace(lat: Double, lng: Double): Boolean {
+        val pLat = lastHistoryLat ?: return true
+        val pLng = lastHistoryLng ?: return true
+        val results = FloatArray(1)
+        Location.distanceBetween(pLat, pLng, lat, lng, results)
+        return results[0] > HISTORY_MIN_DISTANCE_M
     }
 
     /** Turns coordinates into a short human-readable place name (best effort). */
@@ -429,12 +484,206 @@ class EnforcementService : Service() {
     private var lastPermPrompt = 0L
 
     /**
-     * If the child has turned off a required protection after setup, bring the
-     * permission screen to the front so they're prompted to re-grant it.
+     * "Banking mode" / lockbox — the core of GuardNest's tamper handling.
+     *
+     * While every required protection is granted, the child uses the phone
+     * normally. The moment one is turned off — e.g. the child disables the
+     * accessibility service so a strict banking / UPI app will run — we suspend
+     * every app except the parent's allow-list ([SensitiveApps]) plus the
+     * essentials needed to navigate and re-grant permissions. Turning the
+     * protections back on restores everything automatically.
+     *
+     * This runs in the always-on foreground service and enforces via Device
+     * Owner app-suspension, so it keeps working even when accessibility is off
+     * (which is exactly when the child would otherwise escape monitoring).
      */
-    private fun promptForMissingPermissions() {
+    private fun enforceLockbox() {
         if (!ChildStore.isPaired(this)) return
-        if (Permissions.allGranted(this)) return
+        val allOk = Permissions.allGranted(this)
+        val active = ChildStore.lockboxActive(this)
+        when {
+            !allOk -> applyLockbox(firstEntry = !active)
+            active -> releaseLockbox()
+        }
+    }
+
+    /**
+     * Suspends every non-allowed app. Idempotent: safe to re-assert each tick,
+     * which self-heals against a newly installed app or an app-rules race.
+     */
+    private fun applyLockbox(firstEntry: Boolean) {
+        val launchable = AppBlocker.launchableApps(this).map { it.packageName }
+        val toSuspend = launchable
+            .filterNot {
+                it == packageName ||
+                    isEssential(it) ||
+                    SensitiveApps.isSensitive(it)
+            }
+            .toSet()
+
+        if (toSuspend.isNotEmpty()) {
+            AppBlocker.setBlocked(this, toSuspend.toList())
+        }
+
+        if (firstEntry) {
+            val since = System.currentTimeMillis()
+            ChildStore.enterLockbox(this, toSuspend, since)
+            reportLockbox(active = true, since = since)
+            writeProtectionAlert(type = "protection_disabled")
+        } else if (toSuspend != ChildStore.lockboxSuspended(this)) {
+            // Keep the persisted set current so exit stays precise.
+            ChildStore.enterLockbox(this, toSuspend, ChildStore.lockboxSince(this))
+        }
+
+        // Show GuardNest so the child sees why apps are unavailable (throttled).
+        bringSelfToFront()
+    }
+
+    /**
+     * Restores normal use once every protection is granted again. Un-suspends
+     * only what lockbox suspended, leaving any app the parent has separately
+     * blocked (via app rules) still suspended.
+     */
+    private fun releaseLockbox() {
+        val toRelease = ChildStore.lockboxSuspended(this) - currentBlocked
+        if (toRelease.isNotEmpty()) {
+            AppBlocker.clearBlocked(this, toRelease.toList())
+        }
+        ChildStore.exitLockbox(this)
+        lastForeground = null
+        LockOverlay.hide(this)
+        reportLockbox(active = false, since = 0L)
+        writeProtectionAlert(type = "protection_restored")
+    }
+
+    private fun isEssential(pkg: String): Boolean {
+        if (pkg == packageName) return true
+        // Note: the package installer is deliberately NOT essential, so opening
+        // an app's uninstall screen while a protection is off gets covered by
+        // the lock overlay (the child must ask the parent to remove apps).
+        return pkg.contains("settings") ||
+            pkg.contains("permissioncontroller") ||
+            pkg.contains("launcher") ||
+            pkg.contains("systemui") ||
+            pkg.contains("dialer") ||
+            pkg.contains(".phone") ||
+            pkg.endsWith(".home")
+    }
+
+    // ---- Fallback enforcement (no Device Owner) ---------------------------
+
+    private var lastForeground: String? = null
+
+    /**
+     * Fast loop that enforces the lockbox on devices that are NOT Device Owner
+     * (where app-suspension is unavailable). While a protection is off, it
+     * covers any non-allowed foreground app with the lock overlay, leaving the
+     * parent's banking allow-list usable. Needs usage access + overlay to stay
+     * granted; on Device Owner devices the app-suspension already handles this
+     * and the overlay simply never triggers because allowed apps stay open.
+     */
+    private val lockGuard = object : Runnable {
+        override fun run() {
+            try {
+                guardForeground()
+            } catch (_: Throwable) {
+                // Ignore — always reschedule below.
+            } finally {
+                handler.postDelayed(this, LOCKGUARD_INTERVAL_MS)
+            }
+        }
+    }
+
+    private fun guardForeground() {
+        if (!ChildStore.isPaired(this)) return
+        // Bedtime/pause lock takes precedence and already covers everything.
+        if (ScreenGuard.shouldLock(
+                rule.paused, rule.bedtimeEnabled, rule.bedtimeStart, rule.bedtimeEnd
+            )
+        ) return
+
+        // Live check so enforcement reacts within a second, without waiting for
+        // the 30s state machine (which still does the parent reporting/alerts).
+        if (Permissions.allGranted(this)) {
+            // Protections are intact — drop our fallback overlay if we raised it.
+            if (LockOverlay.isShowing()) LockOverlay.hide(this)
+            return
+        }
+
+        val fg = foregroundPackage() ?: return
+        val allowed = fg == packageName ||
+            isEssential(fg) ||
+            SensitiveApps.isSensitive(fg)
+        if (allowed) {
+            LockOverlay.hide(this)
+        } else {
+            LockOverlay.show(
+                this,
+                "App locked",
+                "Turn your GuardNest protections back on to use this app.",
+            )
+        }
+    }
+
+    /**
+     * The current foreground app package via UsageStats (works without the
+     * accessibility service). Remembers the last seen value so it stays correct
+     * while the child sits in one app with no new events. Null if usage access
+     * isn't granted.
+     */
+    private fun foregroundPackage(): String? {
+        if (!Permissions.hasUsageAccess(this)) return null
+        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+            ?: return lastForeground
+        val now = System.currentTimeMillis()
+        val events = usm.queryEvents(now - 3_000, now)
+        val e = UsageEvents.Event()
+        while (events.hasNextEvent()) {
+            events.getNextEvent(e)
+            if (e.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND ||
+                e.eventType == UsageEvents.Event.ACTIVITY_RESUMED
+            ) {
+                lastForeground = e.packageName
+            }
+        }
+        return lastForeground
+    }
+
+    /** Reports the current banking-mode state onto the child doc for the parent. */
+    private fun reportLockbox(active: Boolean, since: Long) {
+        val familyId = ChildStore.familyId(this) ?: return
+        val childId = ChildStore.childId(this) ?: return
+        val data = hashMapOf<String, Any?>(
+            "lockboxActive" to active,
+            "lockboxSince" to if (active && since > 0) Date(since) else null,
+        )
+        FirebaseFirestore.getInstance()
+            .collection("families").document(familyId)
+            .collection("children").document(childId)
+            .set(data, SetOptions.merge())
+    }
+
+    /** Logs a tamper-evident alert the parent sees on their next check-in. */
+    private fun writeProtectionAlert(type: String) {
+        val familyId = ChildStore.familyId(this) ?: return
+        val childId = ChildStore.childId(this) ?: return
+        FirebaseFirestore.getInstance()
+            .collection("families").document(familyId)
+            .collection("alerts").add(
+                mapOf(
+                    "type" to type,
+                    "childId" to childId,
+                    "protections" to offProtections(),
+                    "at" to FieldValue.serverTimestamp(),
+                )
+            )
+    }
+
+    /**
+     * Brings the permission screen to the front so the child is prompted to
+     * re-grant a protection they turned off (throttled).
+     */
+    private fun bringSelfToFront() {
         val now = System.currentTimeMillis()
         if (now - lastPermPrompt < PERM_PROMPT_MS) return
         lastPermPrompt = now
@@ -692,6 +941,14 @@ class EnforcementService : Service() {
                     .filter { it.getBoolean("blocked") == true }
                     .map { it.id }
                     .toSet()
+                // Family-wide "banking mode" allow-list: apps the parent marked
+                // usable while a protection is off. Union with the built-in
+                // defaults so common banking/UPI apps work out of the box.
+                val bankingAllowed = snaps.documents
+                    .filter { it.getBoolean("bankingAllowed") == true }
+                    .map { it.id }
+                    .toSet()
+                SensitiveApps.packages = SensitiveApps.DEFAULTS + bankingAllowed
                 // Feed the accessibility blocker (works without Device Owner).
                 BlockedApps.packages = blocked
                 val toUnblock = currentBlocked - blocked
@@ -727,6 +984,9 @@ class EnforcementService : Service() {
                 WebFilter.enabled = enabled
                 WebFilter.blockedSites = sites
                 WebFilter.enabledCategories = cats
+                WebFilter.blockOtherBrowsers = snap?.getBoolean("blockOtherBrowsers") == true
+                WebFilter.approvedBrowser =
+                    (snap?.get("approvedBrowser") as? String)?.takeIf { it.isNotBlank() }
                 if (enabled && cats.isNotEmpty()) {
                     // Load category domain lists (off the main thread) for matching.
                     Thread { runCatching { CategoryFeed.loadCache(applicationContext) } }
@@ -771,16 +1031,21 @@ class EnforcementService : Service() {
         private const val CHANNEL_ID = "guardnest_protection"
         private const val NOTIF_ID = 1001
         private const val EVAL_INTERVAL_MS = 30_000L
+        private const val LOCKGUARD_INTERVAL_MS = 700L
         private const val HEARTBEAT_MS = 120_000L
         private const val USAGE_MS = 300_000L
         private const val LOCATION_MS = 120_000L
         private const val LOCATION_HISTORY_MS = 1_800_000L
+        // Minimum distance (metres) from the last history point to count as a
+        // new, distinct place worth recording.
+        private const val HISTORY_MIN_DISTANCE_M = 100f
         private const val WEBHISTORY_MS = 45_000L
         private const val CALLS_MS = 120_000L
         private const val PERM_PROMPT_MS = 60_000L
         private const val SMS_MS = 120_000L
         private const val MESSAGES_MS = 30_000L
         private const val YOUTUBE_MS = 30_000L
+        private const val UPDATE_CHECK_MS = 3 * 60 * 60 * 1000L // 3 hours
 
         /** Starts the service if this device is paired. */
         fun start(ctx: Context) {

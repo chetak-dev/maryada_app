@@ -66,6 +66,14 @@ service cloud.firestore {
       }
     }
 
+    // App update manifest (OTA). Any signed-in device may read the latest
+    // version + APK URL; only a real (non-anonymous) parent account may publish.
+    match /appConfig/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn()
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
     // One-time pairing codes. A signed-in user may read a code by its exact id;
     // only a guardian of the referenced family may create/delete; updates are
     // limited to the redemption handshake (marking used).

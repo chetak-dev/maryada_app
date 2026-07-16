@@ -12,7 +12,6 @@ import '../chat_history/chat_history_screen.dart';
 import '../location/location_screen.dart';
 import '../sms_history/sms_history_screen.dart';
 import '../youtube_history/youtube_history_screen.dart';
-
 /// Per-child control center: status, quick actions and the per-device feature
 /// areas. UI shell with placeholder actions; backend wiring comes later.
 class ChildDetailScreen extends StatefulWidget {
@@ -92,7 +91,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                   icon: Icons.apps_rounded,
                   color: AppColors.accent,
                   title: 'App rules',
-                  subtitle: 'Block apps, per-app limits',
+                  subtitle: 'Block apps, per-app limits, banking mode',
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => AppRulesScreen(

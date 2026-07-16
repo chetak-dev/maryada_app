@@ -91,6 +91,13 @@ class FamilyRepository {
     return Db.children(familyId).doc(childId).delete();
   }
 
+  /// Live stream of a single child doc (banking-mode & protection status).
+  Stream<Child?> watchChild(String familyId, String childId) {
+    return Db.children(familyId).doc(childId).snapshots().map(
+          (d) => d.exists ? _childFromDoc(d.id, d.data()!) : null,
+        );
+  }
+
   // ---- Pairing -----------------------------------------------------------
 
   /// Creates a one-time pairing code bound to a child slot.
@@ -130,6 +137,13 @@ class FamilyRepository {
 
     double? d(dynamic v) => v is num ? v.toDouble() : null;
 
+    final rawProt = map['protections'];
+    final protections = <String, bool>{
+      if (rawProt is Map)
+        for (final e in rawProt.entries)
+          e.key.toString(): e.value == true,
+    };
+
     return Child(
       id: id,
       name: (map['name'] ?? 'Child').toString(),
@@ -143,6 +157,9 @@ class FamilyRepository {
       locationUpdatedAt: (map['locationUpdatedAt'] as Timestamp?)?.toDate(),
       address: (map['address'] as String?),
       lastSeenAt: (map['lastSeenAt'] as Timestamp?)?.toDate(),
+      lockboxActive: map['lockboxActive'] == true,
+      lockboxSince: (map['lockboxSince'] as Timestamp?)?.toDate(),
+      protections: protections,
     );
   }
 

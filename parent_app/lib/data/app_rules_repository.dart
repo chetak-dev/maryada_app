@@ -6,7 +6,12 @@ import 'db.dart';
 class AppRuleData {
   final bool blocked;
   final int dailyLimitMinutes;
-  const AppRuleData({this.blocked = false, this.dailyLimitMinutes = 0});
+  final bool bankingAllowed;
+  const AppRuleData({
+    this.blocked = false,
+    this.dailyLimitMinutes = 0,
+    this.bankingAllowed = false,
+  });
 }
 
 /// A real installed app reported by a child device.
@@ -42,6 +47,7 @@ class AppRulesRepository {
           blocked: d.data()['blocked'] == true,
           dailyLimitMinutes:
               (d.data()['dailyLimitMinutes'] as num?)?.toInt() ?? 0,
+          bankingAllowed: d.data()['bankingAllowed'] == true,
         ),
     };
   }
@@ -52,11 +58,13 @@ class AppRulesRepository {
     required String appName,
     required bool blocked,
     required int dailyLimitMinutes,
+    required bool bankingAllowed,
   }) {
     return _col(familyId).doc(packageName).set({
       'appName': appName,
       'blocked': blocked,
       'dailyLimitMinutes': dailyLimitMinutes,
+      'bankingAllowed': bankingAllowed,
     }, SetOptions(merge: true));
   }
 

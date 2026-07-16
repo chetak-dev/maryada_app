@@ -56,6 +56,7 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
           if (r != null) {
             app.blocked = r.blocked;
             app.dailyLimitMinutes = r.dailyLimitMinutes;
+            app.bankingAllowed = r.bankingAllowed;
           }
         }
         _loading = false;
@@ -74,6 +75,7 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
       appName: app.appName,
       blocked: app.blocked,
       dailyLimitMinutes: app.dailyLimitMinutes,
+      bankingAllowed: app.bankingAllowed,
     );
   }
 
@@ -141,6 +143,10 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
                             setState(() => _filtered[i].blocked = v);
                             _persist(_filtered[i]);
                           },
+                          onBankingChanged: (v) {
+                            setState(() => _filtered[i].bankingAllowed = v);
+                            _persist(_filtered[i]);
+                          },
                         ),
                       ),
           ),
@@ -154,10 +160,12 @@ class _AppTile extends StatelessWidget {
   const _AppTile({
     required this.app,
     required this.onBlockChanged,
+    required this.onBankingChanged,
   });
 
   final AppRule app;
   final ValueChanged<bool> onBlockChanged;
+  final ValueChanged<bool> onBankingChanged;
 
   String? get _subtitle {
     final names = app.owners.isNotEmpty ? app.owners.join(', ') : null;
@@ -212,8 +220,40 @@ class _AppTile extends StatelessWidget {
                       ),
                     ),
                   ],
+                  if (app.bankingAllowed) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.account_balance_rounded,
+                            size: 14, color: AppColors.accent),
+                        SizedBox(width: 4),
+                        Text(
+                          'Allowed in banking mode',
+                          style: TextStyle(
+                            color: AppColors.accent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
+            ),
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              onSelected: (v) {
+                if (v == 'banking') onBankingChanged(!app.bankingAllowed);
+              },
+              itemBuilder: (context) => [
+                CheckedPopupMenuItem<String>(
+                  value: 'banking',
+                  checked: app.bankingAllowed,
+                  child: const Text('Allow in banking mode'),
+                ),
+              ],
             ),
             Switch(value: app.blocked, onChanged: onBlockChanged),
           ],

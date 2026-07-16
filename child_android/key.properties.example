@@ -1,0 +1,15 @@
+# Copy this file to `key.properties` (same folder) and fill in your values.
+# `key.properties` is gitignored — never commit your real keystore or passwords.
+#
+# 1) Create a release keystore (run once, in the child_android folder):
+#    keytool -genkey -v -keystore guardnest-release.jks -keyalg RSA -keysize 2048 \
+#            -validity 10000 -alias guardnest
+#    (It will prompt for a password — type it yourself; keep it safe. If you lose
+#     this keystore you can no longer push updates to installed devices.)
+#
+# 2) Copy this file to key.properties and set the values below.
+
+storeFile=guardnest-release.jks
+storePassword=YOUR_KEYSTORE_PASSWORD
+keyAlias=guardnest
+keyPassword=YOUR_KEY_PASSWORD

@@ -8,7 +8,7 @@ enum ChildStatus { online, needsAttention, paired, offline }
 extension ChildStatusUi on ChildStatus {
   String get label => switch (this) {
         ChildStatus.online => 'Protected',
-        ChildStatus.needsAttention => 'Needs attention',
+        ChildStatus.needsAttention => 'Permission missing',
         ChildStatus.paired => 'Setting up',
         ChildStatus.offline => 'Offline',
       };
@@ -45,6 +45,17 @@ class Child {
   /// silent (e.g. uninstalled, powered off, or no network).
   final DateTime? lastSeenAt;
 
+  /// True while the child has a required protection turned off and the device
+  /// is in "banking mode" — every app except the allow-list is suspended.
+  final bool lockboxActive;
+
+  /// When banking mode started (for showing duration to the parent).
+  final DateTime? lockboxSince;
+
+  /// Live grant state of each protection, e.g. {'accessibility': false, ...}.
+  /// Empty until the device reports it via heartbeat.
+  final Map<String, bool> protections;
+
   const Child({
     required this.id,
     required this.name,
@@ -57,6 +68,9 @@ class Child {
     this.locationUpdatedAt,
     this.address,
     this.lastSeenAt,
+    this.lockboxActive = false,
+    this.lockboxSince,
+    this.protections = const {},
   });
 
   /// If the device stops sending heartbeats (uninstalled / off / no network)
@@ -76,6 +90,12 @@ class Child {
   }
 
   bool get hasLocation => lat != null && lng != null;
+
+  /// Protections currently turned off on the device (from the live heartbeat).
+  List<String> get offProtections => protections.entries
+      .where((e) => e.value == false)
+      .map((e) => e.key)
+      .toList();
 
   String get initials =>
       name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();

@@ -25,15 +25,6 @@ object Permissions {
         ctx.checkSelfPermission(android.Manifest.permission.READ_SMS) ==
             PackageManager.PERMISSION_GRANTED
 
-    fun hasNotificationAccess(ctx: Context): Boolean {
-        val enabled = Settings.Secure.getString(
-            ctx.contentResolver, "enabled_notification_listeners"
-        ) ?: return false
-        val cn = ComponentName(ctx, GuardNestNotificationListener::class.java)
-            .flattenToString()
-        return enabled.split(':').any { it.equals(cn, ignoreCase = true) }
-    }
-
     fun hasVpnConsent(ctx: Context): Boolean = VpnService.prepare(ctx) == null
 
     fun hasBatteryExemption(ctx: Context): Boolean {
@@ -57,7 +48,6 @@ object Permissions {
     /** True only when every required protection is currently granted. */
     fun allGranted(ctx: Context): Boolean =
         hasUsageAccess(ctx) && hasCallLog(ctx) && hasSms(ctx) &&
-            hasNotificationAccess(ctx) &&
             hasBatteryExemption(ctx) && hasDeviceAdmin(ctx) &&
             hasOverlay(ctx) && hasAccessibility(ctx)
 }

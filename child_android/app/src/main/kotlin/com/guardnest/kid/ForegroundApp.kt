@@ -41,4 +41,8 @@ object ForegroundApp {
         if (pkg.isEmpty()) return false
         return pkg in BROWSERS || pkg.contains("browser")
     }
+
+    /** True if [pkg] is a web browser. */
+    fun isBrowser(pkg: String): Boolean =
+        pkg in BROWSERS || pkg.contains("browser")
 }

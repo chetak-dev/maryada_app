@@ -17,6 +17,7 @@ import '../add_child/add_child_screen.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../child_detail/child_detail_screen.dart';
 import '../location/location_screen.dart';
+import '../publish_update/publish_update_screen.dart';
 import '../screen_time/screen_time_screen.dart';
 import '../web_filter/web_filter_screen.dart';
 
@@ -70,8 +71,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: const Icon(Icons.settings_outlined),
             onSelected: (v) {
               if (v == 'signout') _signOut(context);
+              if (v == 'publish') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const PublishUpdateScreen(),
+                  ),
+                );
+              }
             },
             itemBuilder: (_) => const [
+              PopupMenuItem(
+                value: 'publish',
+                child: Row(
+                  children: [
+                    Icon(Icons.system_update_rounded, size: 20),
+                    SizedBox(width: AppSpacing.sm),
+                    Text('Publish app update'),
+                  ],
+                ),
+              ),
               PopupMenuItem(
                 value: 'signout',
                 child: Row(
