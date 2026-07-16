@@ -154,39 +154,159 @@ class GuardNestAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {
             null
         } ?: return
-        try {
+        // Shorts are watched by scrolling (no watch-page metadata), so try them
+        // first; then the standard watch page; then inline autoplay in the feed.
+        if (captureYoutubeShorts(pkg, root)) return
+        if (captureYoutubeWatchPage(pkg, root)) return
+        captureYoutubeFeed(root)
+    }
+
+    /** Standard watch page: reads the video metadata block. Returns true if found. */
+    private fun captureYoutubeWatchPage(pkg: String, root: AccessibilityNodeInfo): Boolean {
+        return try {
             val meta = root
                 .findAccessibilityNodeInfosByViewId("$pkg:id/video_metadata_layout")
-                ?.firstOrNull() ?: return
+                ?.firstOrNull() ?: return false
             val texts = ArrayList<String>()
             collectTexts(meta, texts, 0)
-            // The first substantial, non-UI line is the video title.
             val title = texts.firstOrNull {
                 it.length >= 2 && it.lowercase() !in YT_NOISE
-            } ?: return
-            // Channel: prefer an "@handle"; else the line right after the title
-            // (skipping the like/view/date summary line).
+            } ?: return false
             val channel = texts.firstOrNull { it.startsWith("@") }
                 ?: texts.getOrNull(texts.indexOf(title) + 1)
                     ?.takeIf { !it.contains("views", true) && it.lowercase() !in YT_NOISE }
                 ?: ""
-            // Accumulate watch time: add the gap since the last capture of the
-            // SAME video (ignoring big gaps that mean the child was away/paused).
-            val now = System.currentTimeMillis()
-            val addMs = if (title == lastYtTitle) {
-                val d = now - lastYtTickAt
-                if (d in 1..YT_MAX_GAP_MS) d else 0L
-            } else 0L
-            lastYtTitle = title
-            lastYtTickAt = now
-            YoutubeStore.record(title, channel, addMs)
+            recordYt(title, channel)
+            true
         } catch (_: Exception) {
+            false
         }
+    }
+
+    // Feed autoplay: which video is centred, and since when (dwell detection).
+    private var lastFeedTitle: String? = null
+    private var lastFeedSince = 0L
+
+    /**
+     * Best-effort capture of a 16:9 video that autoplays inline in the YouTube
+     * home feed while the child scrolls (no tap needed). Picks the video cell
+     * most centred on screen and only records it once it has stayed centred for
+     * a short dwell — so videos merely scrolled past aren't logged.
+     */
+    private fun captureYoutubeFeed(root: AccessibilityNodeInfo) {
+        val dm = resources.displayMetrics
+        val centerY = dm.heightPixels / 2
+        val minWidth = (dm.widthPixels * 0.55).toInt()
+        val rect = Rect()
+        var bestCd: String? = null
+        var bestDist = Int.MAX_VALUE
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var scanned = 0
+        while (queue.isNotEmpty() && scanned < 700) {
+            val node = queue.removeFirst()
+            scanned++
+            val cd = node.contentDescription?.toString()?.trim()
+            if (cd != null && cd.length in 8..220 && looksLikeVideoDesc(cd)) {
+                node.getBoundsInScreen(rect)
+                // A feed video thumbnail is wide and currently on screen.
+                if (rect.width() >= minWidth &&
+                    rect.top < dm.heightPixels && rect.bottom > 0
+                ) {
+                    val dist = kotlin.math.abs((rect.top + rect.bottom) / 2 - centerY)
+                    if (dist < bestDist) {
+                        bestDist = dist
+                        bestCd = cd
+                    }
+                }
+            }
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        val cd = bestCd ?: return
+        val (title, channel) = parseFeedDescription(cd)
+        if (title.length < 3) return
+        val now = System.currentTimeMillis()
+        if (title != lastFeedTitle) {
+            // Newly centred — start the dwell timer, don't record yet.
+            lastFeedTitle = title
+            lastFeedSince = now
+            return
+        }
+        if (now - lastFeedSince < FEED_DWELL_MS) return
+        recordYt(title, channel)
+    }
+
+    /** Heuristic: a YouTube feed thumbnail's description mentions the channel /
+     *  view / age, so it's a real video (not a shelf header or ad button). */
+    private fun looksLikeVideoDesc(cd: String): Boolean {
+        val l = cd.lowercase()
+        return l.contains(" by ") ||
+            l.contains(" views") ||
+            l.contains(" ago") ||
+            YT_COUNT.containsMatchIn(cd)
+    }
+
+    /** Splits a feed thumbnail description into (title, channel), best effort.
+     *  Format is usually "Title - Channel - duration - N views - N ago". */
+    private fun parseFeedDescription(cd: String): Pair<String, String> {
+        val parts = cd.split(" - ", " by ").map { it.trim() }.filter { it.isNotEmpty() }
+        val title = parts.firstOrNull() ?: cd
+        val channel = parts.getOrNull(1)
+            ?.takeIf { !it.contains("view", true) && !it.contains("ago", true) }
+            ?: ""
+        return title to channel
+    }
+
+    /**
+     * Captures a YouTube **Short** (watched by scrolling). Shorts have no
+     * watch-page metadata; instead the reel overlay shows the channel "@handle"
+     * and the caption. Returns true if a Short was detected and recorded.
+     */
+    private fun captureYoutubeShorts(pkg: String, root: AccessibilityNodeInfo): Boolean {
+        val reel = REEL_IDS.firstNotNullOfOrNull { id ->
+            root.findAccessibilityNodeInfosByViewId("$pkg:id/$id")?.firstOrNull()
+        } ?: return false
+        val texts = ArrayList<String>()
+        collectTexts(reel, texts, 0)
+        if (texts.isEmpty()) return false
+        val channel = texts.firstOrNull { it.startsWith("@") } ?: ""
+        // The caption/title: first substantial line that isn't the handle, a
+        // like/view/comment count, or a bare number/duration.
+        val caption = texts.firstOrNull {
+            it.length >= 2 &&
+                !it.startsWith("@") &&
+                it.lowercase() !in YT_NOISE &&
+                !YT_COUNT.containsMatchIn(it) &&
+                !it.all { c -> c.isDigit() || c == ':' || c == '.' }
+        }
+        // Prefer the caption; else record it as a Short from the channel so the
+        // activity still shows up.
+        val title = caption
+            ?: channel.takeIf { it.isNotEmpty() }?.let { "Short from $it" }
+            ?: return false
+        recordYt(title, channel)
+        return true
+    }
+
+    /** Accumulates watch time for the current YouTube title and records it. */
+    private fun recordYt(title: String, channel: String) {
+        val now = System.currentTimeMillis()
+        // Add the gap since the last capture of the SAME video (ignoring big
+        // gaps that mean the child was away/paused).
+        val addMs = if (title == lastYtTitle) {
+            val d = now - lastYtTickAt
+            if (d in 1..YT_MAX_GAP_MS) d else 0L
+        } else 0L
+        lastYtTitle = title
+        lastYtTickAt = now
+        YoutubeStore.record(title, channel, addMs)
     }
 
     /** Depth-first collects up to a few visible text lines from a node subtree. */
     private fun collectTexts(node: AccessibilityNodeInfo, out: MutableList<String>, depth: Int) {
-        if (depth > 8 || out.size > 12) return
+        if (depth > 10 || out.size > 18) return
         val t = node.text?.toString()?.trim()
         if (!t.isNullOrBlank()) out.add(t)
         for (i in 0 until node.childCount) {
@@ -778,6 +898,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
         /** Max gap between YouTube captures still counted as continuous watching. */
         const val YT_MAX_GAP_MS = 15_000L
 
+        /** How long a feed video must stay centred before it counts as watched
+         *  — only videos actually watched (>30s), not scrolled past, are logged. */
+        const val FEED_DWELL_MS = 30_000L
+
         /** Delivery-status words (in a bubble's description) that mark it outgoing. */
         val STATUS_WORDS = listOf("delivered", "read", "sent", "pending")
 
@@ -785,6 +909,22 @@ class GuardNestAccessibilityService : AccessibilityService() {
         val YT_NOISE = setOf(
             "home", "shorts", "subscriptions", "library", "you", "search",
             "explore", "trending", "notifications", "downloads", "history",
+        )
+
+        /** YouTube Shorts (reel) container view ids — presence means Shorts. */
+        val REEL_IDS = listOf(
+            "reel_player_page_container",
+            "reel_recycler",
+            "reel_watch_player",
+            "reel_player_underlay",
+            "shorts_video_cell",
+        )
+
+        /** Matches like/view/comment/subscriber counts so they aren't taken as
+         *  a Shorts caption/title. */
+        val YT_COUNT = Regex(
+            "\\d+([.,]\\d+)?\\s*[kmb]?\\s*(likes?|views?|comments?|subscribers?|shares?)",
+            RegexOption.IGNORE_CASE,
         )
 
         // Address-bar view ids across common browsers. Bare ids are prefixed
