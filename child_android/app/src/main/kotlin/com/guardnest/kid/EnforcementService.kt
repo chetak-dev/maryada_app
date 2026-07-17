@@ -206,16 +206,12 @@ class EnforcementService : Service() {
         val lock = ScreenGuard.shouldLock(
             rule.paused, rule.bedtimeEnabled, rule.bedtimeStart, rule.bedtimeEnd
         )
-        if (lock) {
-            val title = if (rule.paused) "Paused" else "Bedtime"
-            val subtitle = if (rule.paused)
-                "Your device is paused by your parent."
-            else
-                "It’s bedtime. Your device is resting."
-            LockOverlay.show(this, title, subtitle)
-        } else if (!ChildStore.lockboxActive(this)) {
-            // Don't hide the lock overlay while lockbox owns it — the fast guard
-            // (guardForeground) manages it per foreground app in that state.
+        // Pause / bedtime block ALL apps (enforced live by the accessibility
+        // service) but leave the phone usable for emergency calls — we no longer
+        // freeze the whole device behind a full-screen overlay.
+        ScreenGuard.locked = lock
+        ScreenGuard.label = if (rule.paused) "paused" else "resting (bedtime)"
+        if (!lock && !ChildStore.lockboxActive(this)) {
             LockOverlay.hide(this)
         }
     }

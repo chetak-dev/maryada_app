@@ -13,6 +13,14 @@ import java.util.Calendar
  */
 object ScreenGuard {
 
+    /** True while pause or bedtime is in effect (all apps blocked except
+     *  emergency calls). Set by [EnforcementService], read by the accessibility
+     *  service to bounce the child out of non-essential apps in real time. */
+    @Volatile var locked = false
+
+    /** "paused" / "resting (bedtime)" — for the on-screen message. */
+    @Volatile var label = "paused"
+
     /** True if [now] (minutes from midnight) is within [start, end), handling
      *  overnight windows like 21:00 -> 07:00. */
     fun isWithinWindow(now: Int, start: Int, end: Int): Boolean {

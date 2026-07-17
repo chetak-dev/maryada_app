@@ -64,6 +64,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
     private var lastLockToast = 0L
     private var lastBlockToast = 0L
     private var lastBrowserToast = 0L
+    private var lastPauseToast = 0L
     private var lastShot = 0L
     @Volatile private var shotInFlight = false
     // YouTube watch-time tracking (current video + last capture time).
@@ -86,6 +87,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             ForegroundApp.set(pkg)
+            // Pause / bedtime: block every app except emergency calls & home.
+            if (guardScreenTimeLock(pkg)) return
             // If a required protection was turned off, only let the child use the
             // apps needed to fix it — everything else is bounced to GuardNest.
             if (guardPermissionLockdown(pkg)) return
@@ -452,6 +455,40 @@ class GuardNestAccessibilityService : AccessibilityService() {
             ).show()
         }
         return true
+    }
+
+    /**
+     * Pause / bedtime: every app is blocked EXCEPT emergency calls (the dialer)
+     * and the home screen, so the device isn't fully frozen. Bounces the child
+     * out of any other app. Returns true if it acted.
+     */
+    private fun guardScreenTimeLock(pkg: String): Boolean {
+        if (!ScreenGuard.locked) return false
+        if (pkg == packageName || isEmergencyAllowed(pkg)) return false
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        val now = System.currentTimeMillis()
+        if (now - lastPauseToast > 2000) {
+            lastPauseToast = now
+            Toast.makeText(
+                this,
+                "Your device is ${ScreenGuard.label} by your parent. " +
+                    "Only emergency calls are allowed.",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        return true
+    }
+
+    /** Apps allowed during pause/bedtime: the home screen, system UI and the
+     *  phone dialer (so emergency calls still work). */
+    private fun isEmergencyAllowed(pkg: String): Boolean {
+        return pkg.contains("launcher") ||
+            pkg.contains("systemui") ||
+            pkg.endsWith(".home") ||
+            pkg.contains("dialer") ||
+            pkg.contains(".phone") ||
+            pkg.contains("incallui") ||
+            pkg.contains("emergency")
     }
 
     /**

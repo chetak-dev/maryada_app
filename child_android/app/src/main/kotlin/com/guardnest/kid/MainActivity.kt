@@ -729,14 +729,18 @@ class MainActivity : Activity() {
      * banking mode (lockbox) — only the parent's allow-list stays usable.
      */
     private fun onTemporaryAccess() {
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Temporary Access")
+        android.app.AlertDialog.Builder(
+            this, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+        )
+            .setTitle("Turn off monitoring?")
             .setMessage(
-                "This turns off app monitoring so you can use a banking app.\n\n" +
-                    "Every other app will be locked until you turn Maryada’s " +
-                    "Accessibility back on in Settings. Continue?"
+                "Temporary Access turns off app monitoring so you can use a " +
+                    "banking app.\n\nEvery other app will be locked until you " +
+                    "turn Maryada’s Accessibility back on in Settings.\n\n" +
+                    "Are you sure you want to continue?"
             )
-            .setPositiveButton("Continue") { _, _ ->
+            .setCancelable(false)
+            .setPositiveButton("Yes, turn off") { _, _ ->
                 // Prevent a second tap.
                 tempAccessBtn?.apply {
                     isClickable = false
