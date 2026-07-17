@@ -351,7 +351,7 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _SectionLabel(
-            title: 'Your family',
+            title: 'Your family (${demoChildren.length})',
             trailing: _headerActions(() => Navigator.of(context).push(
                   MaterialPageRoute(builder: (_) => const AddChildScreen()),
                 )),
@@ -382,37 +382,39 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
           );
         }
         final family = families.first;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _SectionLabel(
-              title: family.name,
-              trailing: _headerActions(() => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => AddChildScreen(familyId: family.id),
-                    ),
-                  )),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            StreamBuilder<List<Child>>(
-              stream: repo.watchChildren(family.id),
-              builder: (context, kidSnap) {
-                final kids = kidSnap.data ?? const <Child>[];
-                if (kids.isEmpty) {
-                  return const _EmptyChildren();
-                }
-                return Column(
-                  children: kids
-                      .map((c) => Padding(
-                            padding:
-                                const EdgeInsets.only(bottom: AppSpacing.sm),
-                            child: _ChildCard(child: c, familyId: family.id),
-                          ))
-                      .toList(),
-                );
-              },
-            ),
-          ],
+        return StreamBuilder<List<Child>>(
+          stream: repo.watchChildren(family.id),
+          builder: (context, kidSnap) {
+            final kids = kidSnap.data ?? const <Child>[];
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _SectionLabel(
+                  title: kids.isEmpty
+                      ? family.name
+                      : '${family.name} (${kids.length})',
+                  trailing: _headerActions(() => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => AddChildScreen(familyId: family.id),
+                        ),
+                      )),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                if (kids.isEmpty)
+                  const _EmptyChildren()
+                else
+                  Column(
+                    children: kids
+                        .map((c) => Padding(
+                              padding:
+                                  const EdgeInsets.only(bottom: AppSpacing.sm),
+                              child: _ChildCard(child: c, familyId: family.id),
+                            ))
+                        .toList(),
+                  ),
+              ],
+            );
+          },
         );
       },
     );
