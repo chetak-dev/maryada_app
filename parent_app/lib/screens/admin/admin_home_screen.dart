@@ -16,6 +16,26 @@ class AdminHomeScreen extends StatelessWidget {
   const AdminHomeScreen({super.key});
 
   Future<void> _signOut(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text('You can sign back in anytime with your email.'),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(
+                foregroundColor: AppColors.textSecondary),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Sign out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     if (AuthService.instance.isConfigured) {
       await AuthService.instance.signOut();
     } else if (context.mounted) {
