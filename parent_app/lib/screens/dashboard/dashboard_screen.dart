@@ -15,7 +15,6 @@ import '../../widgets/status_pill.dart';
 import '../add_child/add_child_screen.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../child_detail/child_detail_screen.dart';
-import '../location/location_screen.dart';
 import '../screen_time/screen_time_screen.dart';
 import '../web_filter/web_filter_screen.dart';
 
@@ -286,18 +285,6 @@ class _ControlsCard extends StatelessWidget {
               ),
               const Divider(height: 1, indent: 64),
               _WebFilterControlTile(familyId: familyId),
-              const Divider(height: 1, indent: 64),
-              _ControlTile(
-                icon: Icons.location_on_rounded,
-                color: AppColors.warning,
-                title: 'Location & places',
-                subtitle: 'Live map, history, geofences',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => LocationScreen(familyId: familyId),
-                  ),
-                ),
-              ),
             ],
           ),
         ),
