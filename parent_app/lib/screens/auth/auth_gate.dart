@@ -2,7 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../services/auth_service.dart';
-import '../dashboard/dashboard_screen.dart';
+import '../home/home_shell.dart';
 import 'login_screen.dart';
 
 /// Routes between the login screen and the dashboard based on auth state.
@@ -29,7 +29,7 @@ class AuthGate extends StatelessWidget {
         }
         final user = snap.data;
         if (user == null) return const LoginScreen();
-        return DashboardScreen(uid: user.uid);
+        return HomeShell(uid: user.uid);
       },
     );
   }

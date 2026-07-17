@@ -149,7 +149,7 @@ class _SmsTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sent = msg.isSent;
-    final color = sent ? AppColors.primary : AppColors.accent;
+    final color = sent ? AppColors.primary : AppColors.success;
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(

@@ -80,16 +80,16 @@ class MainActivity : Activity() {
         }
     }
 
-    // Colors
-    private val cPrimary = Color.parseColor("#4F46E5")
-    private val cPrimaryDark = Color.parseColor("#4338CA")
-    private val cAccent = Color.parseColor("#10B981")
-    private val cBg = Color.parseColor("#F5F6FB")
+    // Colors — "Royal & Warm" palette (mirrors the parent app)
+    private val cPrimary = Color.parseColor("#4338CA")
+    private val cPrimaryDark = Color.parseColor("#312E81")
+    private val cAccent = Color.parseColor("#16A34A")
+    private val cBg = Color.parseColor("#FBF9F6")
     private val cCard = Color.parseColor("#FFFFFF")
-    private val cInk = Color.parseColor("#0F172A")
-    private val cMuted = Color.parseColor("#64748B")
-    private val cBorder = Color.parseColor("#E2E8F0")
-    private val cDanger = Color.parseColor("#EF4444")
+    private val cInk = Color.parseColor("#1C1917")
+    private val cMuted = Color.parseColor("#78716C")
+    private val cBorder = Color.parseColor("#EAE6DF")
+    private val cDanger = Color.parseColor("#DC2626")
 
     // Status card views
     private lateinit var statusBadge: TextView

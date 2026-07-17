@@ -226,12 +226,12 @@ class _AppTile extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: const [
                         Icon(Icons.account_balance_rounded,
-                            size: 14, color: AppColors.accent),
+                            size: 14, color: AppColors.success),
                         SizedBox(width: 4),
                         Text(
                           'Allowed in banking mode',
                           style: TextStyle(
-                            color: AppColors.accent,
+                            color: AppColors.success,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),

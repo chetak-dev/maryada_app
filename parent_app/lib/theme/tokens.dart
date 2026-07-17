@@ -6,45 +6,72 @@ import 'package:flutter/material.dart';
 class AppColors {
   AppColors._();
 
-  // Brand — a calm, trustworthy indigo with an emerald "safe" accent.
-  static const Color primary = Color(0xFF4F46E5); // indigo 600
-  static const Color primaryDark = Color(0xFF3730A3); // indigo 800
-  static const Color primaryLight = Color(0xFFEEF2FF); // indigo 50
+  // Brand — "Royal & Warm": a dignified royal indigo paired with a warm gold.
+  static const Color primary = Color(0xFF4338CA); // royal indigo
+  static const Color primaryDark = Color(0xFF312E81); // indigo 900
+  static const Color primaryLight = Color(0xFFECEBFB); // soft indigo tint
 
-  static const Color accent = Color(0xFF10B981); // emerald 500 (safe / online)
-  static const Color accentDark = Color(0xFF047857);
+  static const Color accent = Color(0xFFCA8A04); // warm gold (premium highlight)
+  static const Color accentDark = Color(0xFFA16207);
+  static const Color accentLight = Color(0xFFFBF1D6); // gold tint
 
-  // Status
-  static const Color success = Color(0xFF22C55E);
-  static const Color warning = Color(0xFFF59E0B);
-  static const Color danger = Color(0xFFEF4444);
-  static const Color info = Color(0xFF06B6D4);
+  // Status (semantic, distinct from the gold accent)
+  static const Color success = Color(0xFF16A34A); // green (safe / online)
+  static const Color warning = Color(0xFFEA580C); // orange
+  static const Color danger = Color(0xFFDC2626); // red
+  static const Color info = Color(0xFF0891B2); // cyan
 
-  // Light surfaces
-  static const Color background = Color(0xFFF7F8FC);
+  // Light surfaces — warm off-white / cream
+  static const Color background = Color(0xFFFBF9F6);
   static const Color surface = Color(0xFFFFFFFF);
-  static const Color surfaceMuted = Color(0xFFF1F3F9);
-  static const Color border = Color(0xFFE2E8F0);
+  static const Color surfaceMuted = Color(0xFFF4F1EC);
+  static const Color border = Color(0xFFEAE6DF);
 
-  // Dark surfaces
-  static const Color backgroundDark = Color(0xFF0B1020);
-  static const Color surfaceDark = Color(0xFF151B2E);
-  static const Color surfaceMutedDark = Color(0xFF1E2740);
-  static const Color borderDark = Color(0xFF2A3352);
+  // Dark surfaces — deep royal night
+  static const Color backgroundDark = Color(0xFF141220);
+  static const Color surfaceDark = Color(0xFF1E1B2E);
+  static const Color surfaceMutedDark = Color(0xFF2A2540);
+  static const Color borderDark = Color(0xFF383152);
 
-  // Text
-  static const Color textPrimary = Color(0xFF0F172A);
-  static const Color textSecondary = Color(0xFF475569);
-  static const Color textMuted = Color(0xFF94A3B8);
-  static const Color textOnDark = Color(0xFFF8FAFC);
-  static const Color textSecondaryOnDark = Color(0xFF94A3B8);
+  // Text — warm neutral (stone)
+  static const Color textPrimary = Color(0xFF1C1917);
+  static const Color textSecondary = Color(0xFF57534E);
+  static const Color textMuted = Color(0xFFA8A29E);
+  static const Color textOnDark = Color(0xFFF5F3F0);
+  static const Color textSecondaryOnDark = Color(0xFFA8A29E);
 
-  // Brand gradient (headers, hero, logo mark)
+  // Brand gradient (headers, hero, logo mark) — royal indigo -> violet
   static const Gradient brandGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF6366F1), Color(0xFF4F46E5), Color(0xFF7C3AED)],
+    colors: [Color(0xFF4338CA), Color(0xFF6D28D9), Color(0xFF7C3AED)],
   );
+}
+
+/// Soft, warm elevation shadows — used instead of hard borders for a premium feel.
+class AppShadow {
+  AppShadow._();
+
+  static const List<BoxShadow> card = [
+    BoxShadow(
+      color: Color(0x0F1C1917),
+      blurRadius: 18,
+      offset: Offset(0, 6),
+    ),
+    BoxShadow(
+      color: Color(0x0A1C1917),
+      blurRadius: 3,
+      offset: Offset(0, 1),
+    ),
+  ];
+
+  static const List<BoxShadow> raised = [
+    BoxShadow(
+      color: Color(0x1A4338CA),
+      blurRadius: 24,
+      offset: Offset(0, 10),
+    ),
+  ];
 }
 
 class AppSpacing {

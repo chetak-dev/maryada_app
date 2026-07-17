@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
-import '../dashboard/dashboard_screen.dart';
+import '../home/home_shell.dart';
 
 /// Professional sign-in / sign-up screen for guardians. UI-only for now (no
 /// backend wired yet) — validates input and shows the intended flow.
@@ -83,7 +83,7 @@ class _LoginScreenState extends State<LoginScreen> {
     // When Firebase is connected, AuthGate reacts to the sign-in automatically.
     if (!AuthService.instance.isConfigured) {
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const DashboardScreen()),
+        MaterialPageRoute(builder: (_) => const HomeShell()),
       );
     }
   }

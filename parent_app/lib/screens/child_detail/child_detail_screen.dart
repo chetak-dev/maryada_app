@@ -74,7 +74,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                 const Divider(height: 1, indent: 64),
                 _FeatureTile(
                   icon: Icons.sms_rounded,
-                  color: AppColors.accent,
+                  color: AppColors.success,
                   title: 'Messages',
                   subtitle: 'Text (SMS) history',
                   onTap: () => Navigator.of(context).push(
@@ -284,46 +284,55 @@ class _HeaderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 32,
-              backgroundColor: child.avatarColor,
-              child: Text(
-                child.initials,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 26,
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        gradient: AppColors.brandGradient,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadow.raised,
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 32,
+            backgroundColor: Colors.white.withValues(alpha: 0.22),
+            child: Text(
+              child.initials,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 26,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name,
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                    )),
+                const SizedBox(height: 2),
+                Text(
+                  child.deviceModel,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: Colors.white.withValues(alpha: 0.8)),
                 ),
-              ),
+                const SizedBox(height: AppSpacing.sm),
+                StatusPill(
+                  label: child.effectiveStatus.label,
+                  color: child.effectiveStatus.color,
+                  icon: child.effectiveStatus.icon,
+                  onDark: true,
+                ),
+              ],
             ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(name, style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 2),
-                  Text(
-                    child.deviceModel,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: AppColors.textMuted),
-                  ),
-                  const SizedBox(height: AppSpacing.sm),
-                  StatusPill(
-                    label: child.effectiveStatus.label,
-                    color: child.effectiveStatus.color,
-                    icon: child.effectiveStatus.icon,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

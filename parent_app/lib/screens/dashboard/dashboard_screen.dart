@@ -9,7 +9,6 @@ import '../../data/web_filter_repository.dart';
 import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../models/screen_time_rule.dart';
-import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/status_pill.dart';
@@ -17,7 +16,6 @@ import '../add_child/add_child_screen.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../child_detail/child_detail_screen.dart';
 import '../location/location_screen.dart';
-import '../publish_update/publish_update_screen.dart';
 import '../screen_time/screen_time_screen.dart';
 import '../web_filter/web_filter_screen.dart';
 
@@ -40,14 +38,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   bool get _live => widget.uid != null && Db.ready;
 
-  Future<void> _signOut(BuildContext context) async {
-    if (AuthService.instance.isConfigured) {
-      await AuthService.instance.signOut();
-    } else if (context.mounted) {
-      Navigator.of(context).popUntil((r) => r.isFirst);
-    }
-  }
-
   void _resync() {
     setState(() => _sync++);
     ScaffoldMessenger.of(context)
@@ -65,56 +55,82 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         titleSpacing: AppSpacing.md,
         title: const BrandLockup(markSize: 32),
-        actions: [
-          PopupMenuButton<String>(
-            tooltip: 'Menu',
-            icon: const Icon(Icons.settings_outlined),
-            onSelected: (v) {
-              if (v == 'signout') _signOut(context);
-              if (v == 'publish') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const PublishUpdateScreen(),
-                  ),
-                );
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(
-                value: 'publish',
-                child: Row(
-                  children: [
-                    Icon(Icons.system_update_rounded, size: 20),
-                    SizedBox(width: AppSpacing.sm),
-                    Text('Publish app update'),
-                  ],
-                ),
-              ),
-              PopupMenuItem(
-                value: 'signout',
-                child: Row(
-                  children: [
-                    Icon(Icons.logout_rounded, size: 20),
-                    SizedBox(width: AppSpacing.sm),
-                    Text('Sign out'),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(width: AppSpacing.xs),
-        ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xxl),
         children: [
+          const _DashboardHero(),
+          const SizedBox(height: AppSpacing.lg),
           _FamilyControls(key: ValueKey('controls_$_sync'), uid: _live ? uid : null),
           const SizedBox(height: AppSpacing.lg),
           _FamilyChildren(
             key: ValueKey('children_$_sync'),
             uid: _live ? uid : null,
             onSync: _resync,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A warm gradient greeting hero that anchors the "Royal & Warm" identity at
+/// the top of the home tab.
+class _DashboardHero extends StatelessWidget {
+  const _DashboardHero();
+
+  String get _greeting {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        gradient: AppColors.brandGradient,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadow.raised,
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _greeting,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: Colors.white.withValues(alpha: 0.85),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Your family, at a glance',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: const Icon(Icons.shield_moon_rounded,
+                color: Colors.white, size: 28),
           ),
         ],
       ),
@@ -197,7 +213,7 @@ class _WebFilterControlTile extends StatelessWidget {
     if (familyId == null) {
       return _ControlTile(
         icon: Icons.public_rounded,
-        color: AppColors.accent,
+        color: AppColors.success,
         title: 'Web filter',
         subtitle: 'Safe browsing, block sites',
         onTap: () => _open(context),
@@ -209,11 +225,11 @@ class _WebFilterControlTile extends StatelessWidget {
         final on = snap.data?.enabled ?? false;
         return _ControlTile(
           icon: Icons.public_rounded,
-          color: AppColors.accent,
+          color: AppColors.success,
           title: 'Web filter',
           subtitle: 'Safe browsing, block sites',
           badge: on ? 'ON' : null,
-          badgeColor: AppColors.accent,
+          badgeColor: AppColors.success,
           onTap: () => _open(context),
         );
       },

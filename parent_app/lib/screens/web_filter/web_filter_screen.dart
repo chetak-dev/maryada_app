@@ -101,7 +101,7 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
         children: [
           Card(
-            color: _enabled ? AppColors.accent.withValues(alpha: 0.06) : null,
+            color: _enabled ? AppColors.success.withValues(alpha: 0.06) : null,
             child: SwitchListTile(
               contentPadding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.md, vertical: AppSpacing.xs),
@@ -109,10 +109,10 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: AppColors.accent.withValues(alpha: 0.14),
+                  color: AppColors.success.withValues(alpha: 0.14),
                   borderRadius: BorderRadius.circular(AppRadius.md),
                 ),
-                child: const Icon(Icons.shield_rounded, color: AppColors.accent),
+                child: const Icon(Icons.shield_rounded, color: AppColors.success),
               ),
               title: const Text('Safe browsing',
                   style: TextStyle(fontWeight: FontWeight.w600)),

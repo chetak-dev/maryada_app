@@ -80,7 +80,7 @@ object LockOverlay {
             gravity = Gravity.CENTER
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                intArrayOf(Color.parseColor("#4F46E5"), Color.parseColor("#7C3AED"))
+                intArrayOf(Color.parseColor("#4338CA"), Color.parseColor("#7C3AED"))
             )
             setPadding(dp(32), dp(32), dp(32), dp(32))
             isClickable = true

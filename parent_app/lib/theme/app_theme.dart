@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'tokens.dart';
 
@@ -32,9 +33,10 @@ class AppTheme {
     final Color textSecondary =
         isDark ? AppColors.textSecondaryOnDark : AppColors.textSecondary;
 
-    final baseText = Typography.material2021(platform: TargetPlatform.android)
+    final base = Typography.material2021(platform: TargetPlatform.android)
         .black
         .apply(bodyColor: textPrimary, displayColor: textPrimary);
+    final baseText = GoogleFonts.plusJakartaSansTextTheme(base);
 
     return ThemeData(
       useMaterial3: true,
@@ -68,11 +70,13 @@ class AppTheme {
       ),
       cardTheme: CardThemeData(
         color: surface,
-        elevation: 0,
+        elevation: isDark ? 0 : 4,
+        shadowColor: const Color(0x141C1917),
+        surfaceTintColor: Colors.transparent,
         margin: EdgeInsets.zero,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.lg),
-          side: BorderSide(color: border),
+          side: isDark ? BorderSide(color: border) : BorderSide.none,
         ),
       ),
       dividerTheme: DividerThemeData(color: border, thickness: 1, space: 1),
@@ -141,6 +145,30 @@ class AppTheme {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.pill),
         ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: surface,
+        indicatorColor:
+            isDark ? AppColors.surfaceMutedDark : AppColors.primaryLight,
+        elevation: 3,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: const Color(0x141C1917),
+        height: 66,
+        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return IconThemeData(
+            color: selected ? AppColors.primary : AppColors.textMuted,
+          );
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          final selected = states.contains(WidgetState.selected);
+          return TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: selected ? AppColors.primary : AppColors.textMuted,
+          );
+        }),
       ),
     );
   }

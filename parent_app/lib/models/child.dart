@@ -14,7 +14,7 @@ extension ChildStatusUi on ChildStatus {
       };
 
   Color get color => switch (this) {
-        ChildStatus.online => AppColors.accent,
+        ChildStatus.online => AppColors.success,
         ChildStatus.needsAttention => AppColors.warning,
         ChildStatus.paired => AppColors.primary,
         ChildStatus.offline => AppColors.danger,

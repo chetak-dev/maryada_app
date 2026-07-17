@@ -121,7 +121,7 @@ class _CallTile extends StatelessWidget {
   ({IconData icon, Color color}) get _visual {
     switch (call.kind) {
       case CallKind.incoming:
-        return (icon: Icons.call_received_rounded, color: AppColors.accent);
+        return (icon: Icons.call_received_rounded, color: AppColors.success);
       case CallKind.outgoing:
         return (icon: Icons.call_made_rounded, color: AppColors.primary);
       case CallKind.missed:
