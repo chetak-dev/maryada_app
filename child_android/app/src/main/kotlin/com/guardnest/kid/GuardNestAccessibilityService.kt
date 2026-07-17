@@ -95,6 +95,11 @@ class GuardNestAccessibilityService : AccessibilityService() {
             if (pkg != packageName && BlockedApps.isBlocked(pkg)) {
                 // Kick the child out of the blocked app.
                 performGlobalAction(GLOBAL_ACTION_HOME)
+                AlertLog.log(
+                    this, "blockedApp",
+                    "Tried to open ${AlertLog.appLabel(this, pkg)}",
+                    throttleKey = "block:$pkg",
+                )
                 val now = System.currentTimeMillis()
                 if (now - lastToast > 2000) {
                     lastToast = now

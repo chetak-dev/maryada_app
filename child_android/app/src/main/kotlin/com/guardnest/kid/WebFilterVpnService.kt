@@ -229,6 +229,10 @@ class WebFilterVpnService : VpnService() {
             // match a category would show as sites they never tried to visit.
             if (blocked && ForegroundApp.isBrowserForeground()) {
                 WebHistoryStore.recordBlocked(domain)
+                AlertLog.log(
+                    this, "blockedWebsite", "Blocked $domain",
+                    throttleKey = "site:$domain",
+                )
             }
             val reply = if (blocked) {
                 buildNxdomain(dns)

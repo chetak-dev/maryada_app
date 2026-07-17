@@ -4,44 +4,70 @@ import '../theme/tokens.dart';
 
 /// Kinds of alert surfaced to the guardian.
 enum AlertType {
-  geofenceEnter,
-  geofenceExit,
   blockedApp,
   blockedWebsite,
-  screenTimeReached,
+  protectionOff,
+  permissionRemoved,
+  secureModeOn,
+  secureModeOff,
   appInstalled,
-  lowBattery,
+  unknown,
+}
+
+/// Parses the string `type` stored on an alert document.
+AlertType alertTypeFromId(String? id) => switch (id) {
+      'blockedApp' => AlertType.blockedApp,
+      'blockedWebsite' => AlertType.blockedWebsite,
+      'protectionOff' => AlertType.protectionOff,
+      'permissionRemoved' => AlertType.permissionRemoved,
+      'secureModeOn' => AlertType.secureModeOn,
+      'secureModeOff' => AlertType.secureModeOff,
+      'appInstalled' => AlertType.appInstalled,
+      _ => AlertType.unknown,
+    };
+
+/// A short human "x minutes ago" style label for an alert time.
+String timeAgo(DateTime at) {
+  final diff = DateTime.now().difference(at);
+  if (diff.inMinutes < 1) return 'just now';
+  if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  if (diff.inDays < 7) return '${diff.inDays}d ago';
+  return '${at.day}/${at.month}';
 }
 
 extension AlertTypeUi on AlertType {
   String get label => switch (this) {
-        AlertType.geofenceEnter => 'Arrived at a place',
-        AlertType.geofenceExit => 'Left a place',
         AlertType.blockedApp => 'Blocked app opened',
         AlertType.blockedWebsite => 'Blocked website',
-        AlertType.screenTimeReached => 'Screen-time limit reached',
+        AlertType.protectionOff => 'Protection was turned off',
+        AlertType.permissionRemoved => 'Permission removed',
+        AlertType.secureModeOn => 'Entered Secure App Mode',
+        AlertType.secureModeOff => 'Returned to normal',
         AlertType.appInstalled => 'New app installed',
-        AlertType.lowBattery => 'Low battery',
+        AlertType.unknown => 'Alert',
       };
 
   IconData get icon => switch (this) {
-        AlertType.geofenceEnter => Icons.login_rounded,
-        AlertType.geofenceExit => Icons.logout_rounded,
         AlertType.blockedApp => Icons.block_rounded,
         AlertType.blockedWebsite => Icons.public_off_rounded,
-        AlertType.screenTimeReached => Icons.timelapse_rounded,
+        AlertType.protectionOff => Icons.gpp_bad_rounded,
+        AlertType.permissionRemoved => Icons.remove_moderator_rounded,
+        AlertType.secureModeOn => Icons.lock_rounded,
+        AlertType.secureModeOff => Icons.lock_open_rounded,
         AlertType.appInstalled => Icons.download_rounded,
-        AlertType.lowBattery => Icons.battery_alert_rounded,
+        AlertType.unknown => Icons.notifications_rounded,
       };
 
   Color get color => switch (this) {
-        AlertType.geofenceEnter => AppColors.accent,
-        AlertType.geofenceExit => AppColors.info,
         AlertType.blockedApp => AppColors.danger,
         AlertType.blockedWebsite => AppColors.danger,
-        AlertType.screenTimeReached => AppColors.warning,
-        AlertType.appInstalled => AppColors.primary,
-        AlertType.lowBattery => AppColors.warning,
+        AlertType.protectionOff => AppColors.danger,
+        AlertType.permissionRemoved => AppColors.warning,
+        AlertType.secureModeOn => AppColors.primary,
+        AlertType.secureModeOff => AppColors.success,
+        AlertType.appInstalled => AppColors.info,
+        AlertType.unknown => AppColors.info,
       };
 }
 
@@ -70,10 +96,10 @@ const demoWeekUsage = <DailyUsage>[
 ];
 
 const demoAlerts = <Alert>[
-  Alert(AlertType.geofenceEnter, 'Arrived at School', '8:42 AM'),
   Alert(AlertType.blockedApp, 'Tried to open TikTok', '10:15 AM'),
-  Alert(AlertType.screenTimeReached, 'Daily limit reached', '1:20 PM'),
   Alert(AlertType.blockedWebsite, 'Blocked badsite.com', '3:05 PM'),
-  Alert(AlertType.geofenceExit, 'Left School', '3:30 PM'),
-  Alert(AlertType.lowBattery, 'Battery at 15%', '6:48 PM'),
+  Alert(AlertType.secureModeOn, 'Started using a banking app', '1:20 PM'),
+  Alert(AlertType.secureModeOff, 'Back to normal protection', '1:34 PM'),
+  Alert(AlertType.appInstalled, 'Installed Instagram', '11:02 AM'),
+  Alert(AlertType.protectionOff, 'Monitoring was turned off', '9:48 AM'),
 ];
