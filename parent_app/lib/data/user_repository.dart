@@ -43,15 +43,32 @@ class UserRepository {
     // Host: apply an invite's limit if one matches, else the default.
     var maxChildren = kDefaultMaxChildren;
     String? inviteCode;
-    try {
-      final inv = await InvitesRepository.instance.findUnusedForEmail(lower);
-      if (inv != null) {
-        maxChildren =
-            (inv.data()['maxChildren'] as num?)?.toInt() ?? kDefaultMaxChildren;
-        inviteCode = inv.id;
+
+    // 1) Explicit code typed on the sign-up screen (most reliable).
+    final typed = InvitesRepository.instance.pendingCode;
+    if (typed != null && typed.trim().isNotEmpty) {
+      try {
+        final inv = await InvitesRepository.instance.findByCode(typed);
+        if (inv != null && !inv.used) {
+          maxChildren = inv.maxChildren;
+          inviteCode = inv.code;
+        }
+      } catch (_) {}
+      InvitesRepository.instance.pendingCode = null;
+    }
+
+    // 2) Otherwise match an unused invite by email.
+    if (inviteCode == null) {
+      try {
+        final inv = await InvitesRepository.instance.findUnusedForEmail(lower);
+        if (inv != null) {
+          maxChildren =
+              (inv.data()['maxChildren'] as num?)?.toInt() ?? kDefaultMaxChildren;
+          inviteCode = inv.id;
+        }
+      } catch (_) {
+        // Ignore invite lookup failures; fall back to the default limit.
       }
-    } catch (_) {
-      // Ignore invite lookup failures; fall back to the default limit.
     }
 
     final u = AppUser(

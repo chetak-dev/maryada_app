@@ -7,6 +7,7 @@ import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
+import 'host_detail_screen.dart';
 
 /// The admin console: manage host (parent) accounts and their child limits, and
 /// invite new hosts. Only reachable when the signed-in account has the `admin`
@@ -242,60 +243,68 @@ class _HostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 22,
-              backgroundColor: (host.suspended
-                      ? AppColors.danger
-                      : AppColors.primary)
-                  .withValues(alpha: 0.12),
-              child: Icon(Icons.person_rounded,
-                  color: host.suspended ? AppColors.danger : AppColors.primary),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(host.email,
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(
-                    host.suspended
-                        ? 'Suspended · limit ${host.maxChildren}'
-                        : 'Child limit: ${host.maxChildren}',
-                    style: TextStyle(
-                      color: host.suspended
-                          ? AppColors.danger
-                          : AppColors.textMuted,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => HostDetailScreen(host: host)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: (host.suspended
+                        ? AppColors.danger
+                        : AppColors.primary)
+                    .withValues(alpha: 0.12),
+                child: Icon(Icons.person_rounded,
+                    color:
+                        host.suspended ? AppColors.danger : AppColors.primary),
+              ),
+              const SizedBox(width: AppSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(host.email,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(
+                      host.suspended
+                          ? 'Suspended · limit ${host.maxChildren}'
+                          : 'Child limit: ${host.maxChildren}',
+                      style: TextStyle(
+                        color: host.suspended
+                            ? AppColors.danger
+                            : AppColors.textMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
+                  ],
+                ),
+              ),
+              PopupMenuButton<String>(
+                onSelected: (v) async {
+                  if (v == 'limit') {
+                    await _editLimit(context, host);
+                  } else if (v == 'suspend') {
+                    await HostsRepository.instance
+                        .setSuspended(host.uid, !host.suspended);
+                  }
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                      value: 'limit', child: Text('Set child limit')),
+                  PopupMenuItem(
+                    value: 'suspend',
+                    child: Text(host.suspended ? 'Activate' : 'Suspend'),
                   ),
                 ],
               ),
-            ),
-            PopupMenuButton<String>(
-              onSelected: (v) async {
-                if (v == 'limit') {
-                  await _editLimit(context, host);
-                } else if (v == 'suspend') {
-                  await HostsRepository.instance
-                      .setSuspended(host.uid, !host.suspended);
-                }
-              },
-              itemBuilder: (_) => [
-                const PopupMenuItem(value: 'limit', child: Text('Set child limit')),
-                PopupMenuItem(
-                  value: 'suspend',
-                  child: Text(host.suspended ? 'Activate' : 'Suspend'),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

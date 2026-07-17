@@ -67,7 +67,8 @@ service cloud.firestore {
     }
 
     match /families/{familyId} {
-      allow read: if isSignedIn() && request.auth.uid in resource.data.parentUids;
+      allow read: if isAdmin()
+        || (isSignedIn() && request.auth.uid in resource.data.parentUids);
       allow create: if isSignedIn()
         && request.resource.data.ownerUid == request.auth.uid
         && request.auth.uid in request.resource.data.parentUids;
@@ -86,14 +87,16 @@ service cloud.firestore {
       }
 
       match /children/{childId} {
-        allow read: if isParentOf(familyId)
+        allow read: if isAdmin()
+          || isParentOf(familyId)
           || (isSignedIn() && resource.data.deviceUid == request.auth.uid);
         allow write: if isParentOf(familyId)
           || (isSignedIn() && request.resource.data.deviceUid == request.auth.uid);
 
         // Per-child subtree (usage, location, geofences, installed apps, ...).
         match /{document=**} {
-          allow read: if isParentOf(familyId)
+          allow read: if isAdmin()
+            || isParentOf(familyId)
             || (isSignedIn() && childDeviceUid(familyId, childId) == request.auth.uid);
           allow write: if isParentOf(familyId)
             || (isSignedIn() && childDeviceUid(familyId, childId) == request.auth.uid);

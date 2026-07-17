@@ -38,6 +38,10 @@ class InvitesRepository {
   InvitesRepository._();
   static final instance = InvitesRepository._();
 
+  /// Set by the sign-up screen when a host types an invite code, so the role
+  /// resolver can redeem it on first sign-in. Cleared once consumed.
+  String? pendingCode;
+
   CollectionReference<Map<String, dynamic>> get _col =>
       Db.instance.collection('invites');
 
@@ -51,6 +55,11 @@ class InvitesRepository {
   Stream<List<Invite>> watch() {
     return _col.orderBy('createdAt', descending: true).snapshots().map((s) =>
         s.docs.map((d) => Invite.fromMap(d.id, d.data())).toList());
+  }
+
+  Future<Invite?> findByCode(String code) async {
+    final d = await _col.doc(code.trim().toUpperCase()).get();
+    return d.exists ? Invite.fromMap(d.id, d.data()!) : null;
   }
 
   Future<String> createInvite({

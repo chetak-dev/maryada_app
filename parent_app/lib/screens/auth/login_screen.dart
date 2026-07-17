@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../data/invites_repository.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
@@ -18,6 +19,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _password = TextEditingController();
+  final _invite = TextEditingController();
   bool _isSignUp = false;
   bool _obscure = true;
   bool _busy = false;
@@ -26,6 +28,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _email.dispose();
     _password.dispose();
+    _invite.dispose();
     super.dispose();
   }
 
@@ -64,6 +67,9 @@ class _LoginScreenState extends State<LoginScreen> {
       // Real auth when Firebase is connected; otherwise falls through to demo.
       if (AuthService.instance.isConfigured) {
         if (_isSignUp) {
+          // Stash any typed invite code so the role resolver can redeem it
+          // once the account is created.
+          InvitesRepository.instance.pendingCode = _invite.text.trim();
           await AuthService.instance.signUp(_email.text, _password.text);
         } else {
           await AuthService.instance.signIn(_email.text, _password.text);
@@ -179,8 +185,20 @@ class _LoginScreenState extends State<LoginScreen> {
                                   child: const Text('Forgot password?'),
                                 ),
                               ),
-                            ] else
+                            ] else ...[
                               const SizedBox(height: AppSpacing.md),
+                              TextFormField(
+                                controller: _invite,
+                                textCapitalization:
+                                    TextCapitalization.characters,
+                                decoration: const InputDecoration(
+                                  labelText: 'Invite code (optional)',
+                                  hintText: 'From your administrator',
+                                  prefixIcon: Icon(Icons.confirmation_num_outlined),
+                                ),
+                              ),
+                              const SizedBox(height: AppSpacing.md),
+                            ],
                             const SizedBox(height: AppSpacing.sm),
                             FilledButton(
                               onPressed: _busy ? null : _submit,
