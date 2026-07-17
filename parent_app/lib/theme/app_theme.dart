@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'tokens.dart';
 
@@ -33,10 +32,9 @@ class AppTheme {
     final Color textSecondary =
         isDark ? AppColors.textSecondaryOnDark : AppColors.textSecondary;
 
-    final base = Typography.material2021(platform: TargetPlatform.android)
+    final baseText = Typography.material2021(platform: TargetPlatform.android)
         .black
         .apply(bodyColor: textPrimary, displayColor: textPrimary);
-    final baseText = GoogleFonts.plusJakartaSansTextTheme(base);
 
     return ThemeData(
       useMaterial3: true,

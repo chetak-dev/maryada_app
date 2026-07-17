@@ -262,20 +262,25 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(20), dp(48), dp(20), dp(28))
+            setPadding(dp(22), dp(52), dp(22), dp(34))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(cPrimary, Color.parseColor("#7C3AED"))
-            )
+            ).apply {
+                val r = dp(30).toFloat()
+                cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, r, r, r, r)
+            }
+            elevation = dp(10).toFloat()
         }
 
-        // Shield mark
+        // Shield mark — rounded-square badge (mirrors the parent brand mark)
         header.addView(TextView(this).apply {
             text = "\uD83D\uDEE1"
             textSize = 26f
             gravity = Gravity.CENTER
-            val size = dp(52)
-            background = circle(Color.parseColor("#FFFFFF")).apply { alpha = 60 }
+            val size = dp(56)
+            background = rounded(Color.parseColor("#FFFFFF"), dp(18), Color.TRANSPARENT, 0)
+                .apply { alpha = 60 }
             layoutParams = LinearLayout.LayoutParams(size, size)
             setPadding(0, dp(6), 0, 0)
         })
@@ -403,7 +408,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             val s = dp(44)
             layoutParams = LinearLayout.LayoutParams(s, s)
-            background = circle(if (granted) Color.parseColor("#DCFCE7") else Color.parseColor("#EEF2FF"))
+            background = circle(if (granted) Color.parseColor("#DCFCE7") else Color.parseColor("#ECEBFB"))
         })
         val texts = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -556,11 +561,11 @@ class MainActivity : Activity() {
         }
         statusBadge = TextView(this).apply {
             text = "•"
-            textSize = 22f
+            textSize = 24f
             gravity = Gravity.CENTER
-            val s = dp(48)
+            val s = dp(56)
             layoutParams = LinearLayout.LayoutParams(s, s)
-            background = circle(Color.parseColor("#EEF2FF"))
+            background = circle(Color.parseColor("#ECEBFB"))
             setTextColor(cPrimary)
         }
         row.addView(statusBadge)
@@ -571,7 +576,7 @@ class MainActivity : Activity() {
         }
         statusTitle = TextView(this).apply {
             text = "Checking status…"
-            textSize = 18f
+            textSize = 20f
             setTextColor(cInk)
             typeface = Typeface.DEFAULT_BOLD
         }
@@ -615,7 +620,7 @@ class MainActivity : Activity() {
                     android.text.Spanned.SPAN_INCLUSIVE_INCLUSIVE
                 )
             }
-            setHintTextColor(Color.parseColor("#94A3B8"))
+            setHintTextColor(Color.parseColor("#A8A29E"))
             setTextColor(cInk)
             textSize = 22f
             gravity = Gravity.CENTER
@@ -628,7 +633,7 @@ class MainActivity : Activity() {
                 android.text.InputFilter.AllCaps(),
             )
             setPadding(dp(16), dp(18), dp(16), dp(18))
-            background = rounded(Color.parseColor("#F8FAFC"), dp(12), cBorder, dp(1))
+            background = rounded(Color.parseColor("#FAF8F4"), dp(12), cBorder, dp(1))
         }
         pairingCard.addView(codeInput)
         pairingCard.addView(gap(dp(12)))
@@ -855,7 +860,7 @@ class MainActivity : Activity() {
                 "Protected", "This device is linked and safeguarded."
             )
             paired -> setStatus(
-                "\u2713", cPrimary, Color.parseColor("#EEF2FF"),
+                "\u2713", cPrimary, Color.parseColor("#ECEBFB"),
                 "Linked", "Connected to your family. Protection pending setup."
             )
             else -> setStatus(
@@ -937,9 +942,9 @@ class MainActivity : Activity() {
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(18), dp(18), dp(18), dp(18))
-        background = rounded(cCard, dp(18), cBorder, dp(1))
-        elevation = dp(1).toFloat()
+        setPadding(dp(20), dp(20), dp(20), dp(20))
+        background = rounded(cCard, dp(22), Color.TRANSPARENT, 0)
+        elevation = dp(6).toFloat()
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT

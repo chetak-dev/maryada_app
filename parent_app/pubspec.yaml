@@ -43,9 +43,6 @@ dependencies:
   # Open external links (e.g. a video's YouTube search) from the parent app.
   url_launcher: ^6.3.0
 
-  # Typography — Plus Jakarta Sans for a warmer, premium look.
-  google_fonts: ^6.2.1
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
