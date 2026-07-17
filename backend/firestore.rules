@@ -11,6 +11,49 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // ----- Account roles (Admin -> Host) -----
+    function userRole() {
+      return isSignedIn()
+          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : '';
+    }
+    function isAdmin() {
+      return userRole() == 'admin';
+    }
+
+    // Signed-in account records. The admin is bootstrapped by a fixed email;
+    // everyone else may only create their own record as a host. Role, child
+    // limit and suspension can only be changed by an admin (a host may edit
+    // benign fields on their own record but not escalate).
+    match /users/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == uid
+        && (
+          (request.resource.data.role == 'admin'
+            && request.auth.token.email == 'admin@maryada.app')
+          || request.resource.data.role == 'host'
+        );
+      allow update: if isAdmin()
+        || (isSignedIn() && request.auth.uid == uid
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.maxChildren == resource.data.maxChildren
+            && request.resource.data.suspended == resource.data.suspended);
+      allow delete: if isAdmin();
+    }
+
+    // Host invites created by the admin. Any signed-in user may read (to find
+    // and redeem their own invite by email); only an admin creates/deletes;
+    // redemption is a one-way used:false -> true update.
+    match /invites/{code} {
+      allow read: if isSignedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+        || (isSignedIn()
+            && resource.data.used == false
+            && request.resource.data.used == true);
+    }
+
     function familyData(familyId) {
       return get(/databases/$(database)/documents/families/$(familyId)).data;
     }

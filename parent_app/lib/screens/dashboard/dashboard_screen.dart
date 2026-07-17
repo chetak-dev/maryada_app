@@ -5,7 +5,10 @@ import 'package:flutter/material.dart';
 import '../../data/db.dart';
 import '../../data/family_repository.dart';
 import '../../data/rules_repository.dart';
+import '../../data/user_repository.dart';
 import '../../data/web_filter_repository.dart';
+import '../../config.dart';
+import '../../models/app_user.dart';
 import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../models/screen_time_rule.dart';
@@ -324,7 +327,10 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
   }
 
   /// The "Sync" + "Add child" buttons shown next to the family section title.
-  Widget _headerActions(VoidCallback onAdd) {
+  /// When [atLimit] is set the child limit has been reached, so adding is
+  /// blocked with an explanatory message instead.
+  Widget _headerActions(VoidCallback onAdd,
+      {bool atLimit = false, int maxChildren = 0}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -335,8 +341,17 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
             label: const Text('Sync'),
           ),
         TextButton.icon(
-          onPressed: onAdd,
-          icon: const Icon(Icons.add, size: 18),
+          onPressed: atLimit
+              ? () => ScaffoldMessenger.of(context)
+                ..hideCurrentSnackBar()
+                ..showSnackBar(SnackBar(
+                  content: Text(
+                    'Child limit reached ($maxChildren). Ask your admin to raise it.',
+                  ),
+                ))
+              : onAdd,
+          icon: Icon(atLimit ? Icons.lock_outline_rounded : Icons.add,
+              size: 18),
           label: const Text('Add child'),
         ),
       ],
@@ -366,53 +381,66 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
     }
 
     final repo = FamilyRepository.instance;
-    return StreamBuilder<List<FamilyModel>>(
-      stream: repo.watchFamilies(uid),
-      builder: (context, famSnap) {
-        if (famSnap.connectionState == ConnectionState.waiting) {
-          return const Padding(
-            padding: EdgeInsets.all(AppSpacing.lg),
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-        final families = famSnap.data ?? const [];
-        if (families.isEmpty) {
-          return _CreateFamilyCard(
-            onCreate: () => repo.createFamily(name: 'My Family', ownerUid: uid),
-          );
-        }
-        final family = families.first;
-        return StreamBuilder<List<Child>>(
-          stream: repo.watchChildren(family.id),
-          builder: (context, kidSnap) {
-            final kids = kidSnap.data ?? const <Child>[];
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _SectionLabel(
-                  title: kids.isEmpty
-                      ? family.name
-                      : '${family.name} (${kids.length})',
-                  trailing: _headerActions(() => Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => AddChildScreen(familyId: family.id),
+    return StreamBuilder<AppUser?>(
+      stream: UserRepository.instance.watch(uid),
+      builder: (context, userSnap) {
+        final maxChildren = userSnap.data?.maxChildren ?? kDefaultMaxChildren;
+        return StreamBuilder<List<FamilyModel>>(
+          stream: repo.watchFamilies(uid),
+          builder: (context, famSnap) {
+            if (famSnap.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.all(AppSpacing.lg),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final families = famSnap.data ?? const [];
+            if (families.isEmpty) {
+              return _CreateFamilyCard(
+                onCreate: () =>
+                    repo.createFamily(name: 'My Family', ownerUid: uid),
+              );
+            }
+            final family = families.first;
+            return StreamBuilder<List<Child>>(
+              stream: repo.watchChildren(family.id),
+              builder: (context, kidSnap) {
+                final kids = kidSnap.data ?? const <Child>[];
+                final atLimit = kids.length >= maxChildren;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _SectionLabel(
+                      title: kids.isEmpty
+                          ? family.name
+                          : '${family.name} (${kids.length})',
+                      trailing: _headerActions(
+                        () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => AddChildScreen(familyId: family.id),
+                          ),
                         ),
-                      )),
-                ),
-                const SizedBox(height: AppSpacing.sm),
-                if (kids.isEmpty)
-                  const _EmptyChildren()
-                else
-                  Column(
-                    children: kids
-                        .map((c) => Padding(
-                              padding:
-                                  const EdgeInsets.only(bottom: AppSpacing.sm),
-                              child: _ChildCard(child: c, familyId: family.id),
-                            ))
-                        .toList(),
-                  ),
-              ],
+                        atLimit: atLimit,
+                        maxChildren: maxChildren,
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    if (kids.isEmpty)
+                      const _EmptyChildren()
+                    else
+                      Column(
+                        children: kids
+                            .map((c) => Padding(
+                                  padding: const EdgeInsets.only(
+                                      bottom: AppSpacing.sm),
+                                  child:
+                                      _ChildCard(child: c, familyId: family.id),
+                                ))
+                            .toList(),
+                      ),
+                  ],
+                );
+              },
             );
           },
         );
