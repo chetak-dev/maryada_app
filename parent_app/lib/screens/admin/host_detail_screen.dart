@@ -86,6 +86,8 @@ class HostDetailScreen extends StatelessWidget {
         ),
         actions: [
           TextButton(
+              style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textSecondary),
               onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           FilledButton(
             onPressed: () {

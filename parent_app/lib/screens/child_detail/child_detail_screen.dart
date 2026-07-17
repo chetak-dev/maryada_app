@@ -194,6 +194,8 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
         ),
         actions: [
           TextButton(
+              style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textSecondary),
               onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
@@ -238,6 +240,10 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
             children: [
               Expanded(
                 child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textSecondary,
+                    side: const BorderSide(color: AppColors.border),
+                  ),
                   onPressed: () => Navigator.pop(ctx, false),
                   child: const Text('Cancel'),
                 ),

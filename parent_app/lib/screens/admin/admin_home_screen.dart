@@ -121,6 +121,8 @@ class AdminHomeScreen extends StatelessWidget {
         ),
         actions: [
           TextButton(
+            style: TextButton.styleFrom(
+                foregroundColor: AppColors.textSecondary),
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text('Cancel'),
           ),
@@ -325,6 +327,8 @@ class _HostCard extends StatelessWidget {
         ),
         actions: [
           TextButton(
+              style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textSecondary),
               onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
           FilledButton(
             onPressed: () {

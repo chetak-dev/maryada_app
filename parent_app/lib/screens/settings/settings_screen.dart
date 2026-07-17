@@ -20,6 +20,8 @@ class SettingsScreen extends StatelessWidget {
         content: const Text('You can sign back in anytime with your email.'),
         actions: [
           TextButton(
+            style: TextButton.styleFrom(
+                foregroundColor: AppColors.textSecondary),
             onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('Cancel'),
           ),
