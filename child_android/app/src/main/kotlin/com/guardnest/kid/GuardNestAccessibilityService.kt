@@ -834,6 +834,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
                     if (!text.isNullOrBlank()) {
                         WebHistoryStore.recordVisit(text)
                         enforceWebFilter(text)
+                        maybeCaptureBrowserYoutube(root, text)
                         return
                     }
                 }
@@ -844,9 +845,74 @@ class GuardNestAccessibilityService : AccessibilityService() {
             if (host != null) {
                 WebHistoryStore.recordVisit(host)
                 enforceWebFilter(host)
+                maybeCaptureBrowserYoutube(root, host)
             }
         } catch (_: Exception) {
         }
+    }
+
+    private var lastBrowserYtTitle: String? = null
+
+    /**
+     * When the child is watching YouTube in a *browser* (youtube.com) rather
+     * than the app, records the video into the YouTube history. The video title
+     * is taken from the browser tab/page title (e.g. "Video Title - YouTube").
+     */
+    private fun maybeCaptureBrowserYoutube(
+        root: AccessibilityNodeInfo,
+        addressText: String,
+    ) {
+        val h = hostOf(addressText) ?: return
+        if (h != "youtube.com" && !h.endsWith(".youtube.com") && h != "youtu.be") {
+            return
+        }
+        val raw = (activeWindowTitle() ?: browserPageTitle(root))?.trim() ?: return
+        // YouTube page titles look like "Video Title - YouTube". Anything else
+        // (home feed, a channel, search) usually isn't a single watched video.
+        val lower = raw.lowercase()
+        if (!lower.endsWith("- youtube") && !lower.endsWith("- youtube.com")) return
+        var name = raw
+        val dash = name.lastIndexOf('-')
+        if (dash > 0) name = name.substring(0, dash)
+        name = name.trim().trimEnd('-', ' ')
+        // Drop the notification-count prefix Chrome adds, e.g. "(3) Title".
+        name = name.replace(Regex("^\\(\\d+\\)\\s*"), "").trim()
+        if (name.length < 2 || name.equals("youtube", ignoreCase = true)) return
+        if (name == lastBrowserYtTitle) return
+        lastBrowserYtTitle = name
+        YoutubeStore.record(name, "", 0L)
+    }
+
+    /** The active window's accessibility title (Chrome sets this to the page
+     *  title). Null if unavailable. */
+    private fun activeWindowTitle(): String? {
+        return try {
+            windows?.firstOrNull { it.isActive }?.title?.toString()
+                ?: windows?.firstOrNull { it.isFocused }?.title?.toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Falls back to the WebView node's title/description when the window title
+     *  isn't available. */
+    private fun browserPageTitle(root: AccessibilityNodeInfo): String? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var steps = 0
+        while (queue.isNotEmpty() && steps < 400) {
+            steps++
+            val n = queue.removeFirst()
+            val cn = n.className?.toString() ?: ""
+            if (cn.contains("WebView")) {
+                val t = n.contentDescription?.toString() ?: n.text?.toString()
+                if (!t.isNullOrBlank()) return t
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return null
     }
 
     /**
