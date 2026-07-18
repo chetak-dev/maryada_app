@@ -73,16 +73,3 @@ const demoWeekUsage = <DailyUsage>[
   DailyUsage('Sat', 240),
   DailyUsage('Sun', 130),
 ];
-
-const demoAlerts = <Alert>[
-  Alert(AlertType.blockedWebsite, 'Visited a blocked site (badsite.com)',
-      '10:15 AM',
-      childId: 'c1'),
-  Alert(AlertType.tamper, 'Tried to remove or disable protection', '9:48 AM',
-      childId: 'c1'),
-  Alert(AlertType.blockedWebsite, 'Blocked a page (unsafe content)', '3:05 PM',
-      childId: 'c2'),
-];
-
-/// Demo child names for the sample alerts (keyed by [Alert.childId]).
-const demoAlertChildNames = <String, String>{'c1': 'Alex', 'c2': 'Sam'};

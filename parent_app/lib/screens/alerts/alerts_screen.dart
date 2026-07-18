@@ -9,8 +9,8 @@ import '../../models/family.dart';
 import '../../theme/tokens.dart';
 
 /// Recent notable events — only a blocked website visit or an app-tampering /
-/// removal attempt. Alerts are grouped under each child's name. Reads the live
-/// `families/{id}/alerts` feed when connected; shows sample alerts in demo mode.
+/// removal attempt. Alerts are grouped under each child (collapsed by default).
+/// Shows real alerts from the live `families/{id}/alerts` feed only.
 class AlertsScreen extends StatelessWidget {
   const AlertsScreen({super.key, this.uid});
 
@@ -22,17 +22,7 @@ class AlertsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Alerts')),
-      body: _live ? _LiveAlerts(uid: uid!) : _demoBody(),
-    );
-  }
-
-  Widget _demoBody() {
-    final relevant =
-        demoAlerts.where((a) => a.type != AlertType.unknown).toList();
-    if (relevant.isEmpty) return _EmptyAlerts();
-    return _GroupedAlerts(
-      alerts: relevant,
-      nameFor: (id) => demoAlertChildNames[id] ?? 'Child',
+      body: _live ? _LiveAlerts(uid: uid!) : _EmptyAlerts(),
     );
   }
 }
@@ -105,53 +95,82 @@ class _GroupedAlerts extends StatelessWidget {
           AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
       children: [
         for (final childId in order) ...[
-          _ChildHeader(
-              name: nameFor(childId), count: byChild[childId]!.length),
+          _ChildAlertsCard(
+            name: nameFor(childId),
+            alerts: byChild[childId]!,
+          ),
           const SizedBox(height: AppSpacing.sm),
-          for (final a in byChild[childId]!) ...[
-            _AlertCard(alert: a),
-            const SizedBox(height: AppSpacing.sm),
-          ],
-          const SizedBox(height: AppSpacing.md),
         ],
       ],
     );
   }
 }
 
-class _ChildHeader extends StatelessWidget {
-  const _ChildHeader({required this.name, required this.count});
+/// One child's alerts as a collapsible card (collapsed by default).
+class _ChildAlertsCard extends StatelessWidget {
+  const _ChildAlertsCard({required this.name, required this.alerts});
   final String name;
-  final int count;
+  final List<Alert> alerts;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Icon(Icons.person_rounded, size: 18, color: AppColors.primary),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(name,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700)),
-        ),
-        const SizedBox(width: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(
-            color: AppColors.danger.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(AppRadius.pill),
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding:
+              const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          childrenPadding: const EdgeInsets.only(
+              left: AppSpacing.md, right: AppSpacing.md, bottom: AppSpacing.sm),
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child:
+                const Icon(Icons.person_rounded, color: AppColors.primary),
           ),
-          child: Text('$count',
-              style: const TextStyle(
-                  color: AppColors.danger,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 12)),
+          title: Text(name,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          subtitle: Text(
+            '${alerts.length} alert${alerts.length == 1 ? '' : 's'}',
+            style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+          ),
+          children: [
+            for (final a in alerts) _AlertRow(alert: a),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+}
+
+class _AlertRow extends StatelessWidget {
+  const _AlertRow({required this.alert});
+  final Alert alert;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: alert.type.color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+        child: Icon(alert.type.icon, color: alert.type.color, size: 20),
+      ),
+      title: Text(alert.type.label,
+          style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: alert.detail.isEmpty ? null : Text(alert.detail),
+      trailing: Text(alert.timeAgo,
+          style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
     );
   }
 }
@@ -189,35 +208,6 @@ class _EmptyAlerts extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _AlertCard extends StatelessWidget {
-  const _AlertCard({required this.alert});
-  final Alert alert;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: alert.type.color.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(AppRadius.md),
-          ),
-          child: Icon(alert.type.icon, color: alert.type.color, size: 22),
-        ),
-        title: Text(alert.type.label,
-            style: const TextStyle(fontWeight: FontWeight.w700)),
-        subtitle: Text(alert.detail),
-        trailing: Text(alert.timeAgo,
-            style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
       ),
     );
   }

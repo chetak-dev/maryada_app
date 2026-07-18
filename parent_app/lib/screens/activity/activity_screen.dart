@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../data/db.dart';
 import '../../data/web_history_repository.dart';
-import '../../models/activity.dart';
 import '../../theme/tokens.dart';
 
 /// Activity & reports: a weekly screen-time bar chart and today's most-used
@@ -35,53 +34,11 @@ class _ActivityScreenState extends State<ActivityScreen> {
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
         children: [
-          if (!_live) ...[
-            Text('Recent alerts',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: AppSpacing.sm),
-            Card(
-              child: Column(
-                children: [
-                  for (var i = 0; i < demoAlerts.length; i++) ...[
-                    if (i > 0) const Divider(height: 1, indent: 64),
-                    _AlertTile(alert: demoAlerts[i]),
-                  ],
-                ],
-              ),
-            ),
-          ],
           if (_live)
             _WebHistorySection(
                 familyId: widget.familyId!, childId: widget.childId!),
         ],
       ),
-    );
-  }
-}
-
-class _AlertTile extends StatelessWidget {
-  const _AlertTile({required this.alert});
-  final Alert alert;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: alert.type.color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
-        child: Icon(alert.type.icon, color: alert.type.color, size: 22),
-      ),
-      title: Text(alert.type.label,
-          style: const TextStyle(fontWeight: FontWeight.w600)),
-      subtitle: Text(alert.detail),
-      trailing: Text(alert.timeAgo,
-          style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
     );
   }
 }
