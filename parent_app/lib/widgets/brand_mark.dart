@@ -61,3 +61,55 @@ class BrandLockup extends StatelessWidget {
     );
   }
 }
+
+/// Full-screen branded loading view. Matches the HTML boot splash in
+/// `web/index.html` so the app's initial loading looks like a single, seamless
+/// loader instead of two different spinners.
+class BrandLoader extends StatelessWidget {
+  const BrandLoader({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(gradient: AppColors.brandGradient),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 68,
+                height: 68,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: const Icon(Icons.shield_rounded,
+                    color: Colors.white, size: 34),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              const Text(
+                'Maryada',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              const SizedBox(
+                width: 34,
+                height: 34,
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  color: Colors.white,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

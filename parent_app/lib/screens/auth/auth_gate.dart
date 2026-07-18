@@ -5,6 +5,7 @@ import '../../data/user_repository.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/brand_mark.dart';
 import '../../widgets/dialog_buttons.dart';
 import '../admin/admin_home_screen.dart';
 import '../home/home_shell.dart';
@@ -29,9 +30,7 @@ class AuthGate extends StatelessWidget {
       stream: AuthService.instance.authStateChanges(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const BrandLoader();
         }
         final user = snap.data;
         if (user == null) return const LoginScreen();
@@ -66,9 +65,7 @@ class _RoleRouterState extends State<_RoleRouter> {
             // the account is never locked out by a transient error.
             return HomeShell(uid: widget.uid);
           }
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
+          return const BrandLoader();
         }
         return StreamBuilder<AppUser?>(
           stream: UserRepository.instance.watch(widget.uid),
