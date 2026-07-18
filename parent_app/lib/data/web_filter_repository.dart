@@ -7,11 +7,13 @@ class WebFilterSettings {
   final bool enabled;
   final Set<String> blockedCategories;
   final List<String> blockedSites;
+  final List<String> blockedKeywords;
 
   const WebFilterSettings({
     this.enabled = true,
     this.blockedCategories = const {},
     this.blockedSites = const [],
+    this.blockedKeywords = const [],
   });
 }
 
@@ -36,6 +38,9 @@ class WebFilterRepository {
       blockedSites: (d['blockedSites'] is List)
           ? List<String>.from((d['blockedSites'] as List).map((e) => '$e'))
           : const [],
+      blockedKeywords: (d['blockedKeywords'] is List)
+          ? List<String>.from((d['blockedKeywords'] as List).map((e) => '$e'))
+          : const [],
     );
   }
 
@@ -44,7 +49,14 @@ class WebFilterRepository {
       'enabled': s.enabled,
       'blockedCategories': s.blockedCategories.toList(),
       'blockedSites': s.blockedSites,
+      'blockedKeywords': s.blockedKeywords,
     }, SetOptions(merge: true));
+  }
+
+  /// Updates just the content-blocking keyword list.
+  Future<void> setKeywords(String familyId, List<String> keywords) {
+    return _doc(familyId)
+        .set({'blockedKeywords': keywords}, SetOptions(merge: true));
   }
 
   Stream<WebFilterSettings> watch(String familyId) {
@@ -58,6 +70,9 @@ class WebFilterRepository {
             : const {},
         blockedSites: (d['blockedSites'] is List)
             ? List<String>.from((d['blockedSites'] as List).map((e) => '$e'))
+            : const [],
+        blockedKeywords: (d['blockedKeywords'] is List)
+            ? List<String>.from((d['blockedKeywords'] as List).map((e) => '$e'))
             : const [],
       );
     });

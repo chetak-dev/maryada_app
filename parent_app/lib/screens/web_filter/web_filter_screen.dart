@@ -21,7 +21,9 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
   bool _enabled = true;
   final _categories = demoCategories();
   final _blocked = <String>['example-badsite.com'];
+  final _keywords = <String>[];
   final _controller = TextEditingController();
+  final _keywordController = TextEditingController();
 
   bool get _live => widget.familyId != null && Db.ready;
 
@@ -43,6 +45,9 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
         _blocked
           ..clear()
           ..addAll(s.blockedSites);
+        _keywords
+          ..clear()
+          ..addAll(s.blockedKeywords);
       });
     } catch (_) {
       // keep defaults
@@ -58,6 +63,7 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
         blockedCategories:
             _categories.where((c) => c.blocked).map((c) => c.id).toSet(),
         blockedSites: List<String>.from(_blocked),
+        blockedKeywords: List<String>.from(_keywords),
       ),
     );
   }
@@ -65,6 +71,7 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
   @override
   void dispose() {
     _controller.dispose();
+    _keywordController.dispose();
     super.dispose();
   }
 
@@ -87,6 +94,22 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
       _persist();
     }
     _controller.clear();
+  }
+
+  void _addKeyword() {
+    final word = _keywordController.text.trim().toLowerCase();
+    if (word.isEmpty) return;
+    if (word.length < 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Use at least 3 characters.')),
+      );
+      return;
+    }
+    if (!_keywords.contains(word)) {
+      setState(() => _keywords.insert(0, word));
+      _persist();
+    }
+    _keywordController.clear();
   }
 
   @override
@@ -210,6 +233,62 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
                       ),
                     ),
                   ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          Text('Blocked words (page content)',
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          const Text(
+            'Pages whose visible text contains these words are blocked — even '
+            'on new sites. Always on.',
+            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(AppSpacing.md),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _keywordController,
+                          onSubmitted: (_) => _addKeyword(),
+                          decoration: const InputDecoration(
+                            hintText: 'Add a word to block',
+                            prefixIcon: Icon(Icons.text_fields_rounded),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: AppSpacing.sm),
+                      IconButton.filled(
+                        onPressed: _addKeyword,
+                        icon: const Icon(Icons.add),
+                      ),
+                    ],
+                  ),
+                  if (_keywords.isNotEmpty) ...[
+                    const SizedBox(height: AppSpacing.md),
+                    Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.sm,
+                      children: [
+                        for (final w in _keywords)
+                          Chip(
+                            label: Text(w),
+                            onDeleted: () {
+                              setState(() => _keywords.remove(w));
+                              _persist();
+                            },
+                            deleteIcon: const Icon(Icons.close, size: 16),
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),

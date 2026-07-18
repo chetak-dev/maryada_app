@@ -1004,6 +1004,11 @@ class EnforcementService : Service() {
                 WebFilter.blockOtherBrowsers = snap?.getBoolean("blockOtherBrowsers") == true
                 WebFilter.approvedBrowser =
                     (snap?.get("approvedBrowser") as? String)?.takeIf { it.isNotBlank() }
+                // Content-based blocking keywords (page-text scanning). Always
+                // applied, independent of the URL filter's enabled flag.
+                ContentFilter.parentKeywords = (snap?.get("blockedKeywords") as? List<*>)
+                    ?.mapNotNull { (it as? String)?.trim()?.lowercase()?.takeIf { s -> s.length >= 3 } }
+                    ?.toSet() ?: emptySet()
                 if (enabled && cats.isNotEmpty()) {
                     // Load category domain lists (off the main thread) for matching.
                     Thread { runCatching { CategoryFeed.loadCache(applicationContext) } }

@@ -134,6 +134,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (pkg != packageName && ForegroundApp.isBrowserForeground()) {
             if (guardIncognito()) return
             captureBrowserUrl(pkg)
+            scanPageContent()
         }
 
         // For a messaging app (WhatsApp only), read the visible on-screen chat text.
@@ -895,6 +896,41 @@ class GuardNestAccessibilityService : AccessibilityService() {
                 this, "This site is blocked by your parent.", Toast.LENGTH_SHORT
             ).show()
         }
+    }
+
+    private var lastContentScan = 0L
+    private var lastContentBlockToast = 0L
+
+    /**
+     * Scans the browser's *visible page text* for unsafe content and bounces
+     * out of the page if it matches ([ContentFilter]). This is content-based
+     * blocking that works on HTTPS (it reads the rendered text, not the network)
+     * and complements the URL/host filter. Throttled for performance.
+     */
+    private fun scanPageContent() {
+        val now = System.currentTimeMillis()
+        if (now - lastContentScan < 1200L) return
+        lastContentScan = now
+        val root = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val text = collectText(root, StringBuilder(), 0).toString().lowercase()
+        val hit = ContentFilter.match(text) ?: return
+        // Leave the blocked page.
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        if (now - lastContentBlockToast > 1500) {
+            lastContentBlockToast = now
+            Toast.makeText(
+                this, "This page is blocked by your parent.", Toast.LENGTH_SHORT
+            ).show()
+        }
+        AlertLog.log(
+            this, "blockedWebsite",
+            "Blocked a page (unsafe content)",
+            throttleKey = "content:$hit",
+        )
     }
 
     /** Extracts a bare host from an address-bar value, or null if it's a query. */
