@@ -62,7 +62,8 @@ class WebFilterRepository {
   Stream<WebFilterSettings> watch(String familyId) {
     return _doc(familyId).snapshots().map((doc) {
       final d = doc.data();
-      if (d == null) return const WebFilterSettings(enabled: false);
+      // Safe browsing is ON by default (only off when explicitly disabled).
+      if (d == null) return const WebFilterSettings(enabled: true);
       return WebFilterSettings(
         enabled: d['enabled'] != false,
         blockedCategories: (d['blockedCategories'] is List)

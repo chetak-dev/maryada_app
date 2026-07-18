@@ -991,7 +991,9 @@ class EnforcementService : Service() {
             .collection("families").document(familyId)
             .collection("rules").document("webFilter")
             .addSnapshotListener { snap, _ ->
-                val enabled = snap != null && snap.exists() &&
+                // Safe browsing is ON by default: it's only OFF when the parent
+                // has explicitly set enabled = false.
+                val enabled = snap == null || !snap.exists() ||
                     snap.getBoolean("enabled") != false
                 val sites = (snap?.get("blockedSites") as? List<*>)
                     ?.mapNotNull { (it as? String)?.lowercase()?.removePrefix("www.") }

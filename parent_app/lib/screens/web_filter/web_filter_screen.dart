@@ -112,6 +112,44 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
     _keywordController.clear();
   }
 
+  Future<void> _toggleSafeBrowsing(bool v) async {
+    if (!v) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Turn off safe browsing?'),
+          content: const Text(
+            'No websites will be blocked for your child — they\u2019ll be able '
+            'to visit any site, including unsafe ones. Are you sure?',
+          ),
+          actions: [
+            TextButton(
+              style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textSecondary),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Turn off'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true) return; // keep it on
+    }
+    setState(() {
+      _enabled = v;
+      // On -> block all categories; off -> clear every category so nothing is
+      // blocked.
+      for (final c in _categories) {
+        c.blocked = v;
+      }
+    });
+    _persist();
+  }
+
   @override
   Widget build(BuildContext context) {
     final title = widget.childName == null
@@ -141,17 +179,7 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
                   style: TextStyle(fontWeight: FontWeight.w600)),
               subtitle: const Text('Filter unsafe sites and enforce SafeSearch.'),
               value: _enabled,
-              onChanged: (v) {
-                setState(() {
-                  _enabled = v;
-                  // On -> block all categories; off -> clear every category so
-                  // nothing is blocked.
-                  for (final c in _categories) {
-                    c.blocked = v;
-                  }
-                });
-                _persist();
-              },
+              onChanged: _toggleSafeBrowsing,
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
