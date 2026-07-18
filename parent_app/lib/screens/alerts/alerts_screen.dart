@@ -4,13 +4,13 @@ import '../../data/alerts_repository.dart';
 import '../../data/db.dart';
 import '../../data/family_repository.dart';
 import '../../models/activity.dart';
+import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../theme/tokens.dart';
 
-/// Recent notable events across the family — blocked apps/sites, tamper
-/// (protection turned off), Secure App Mode changes and new installs. Reads
-/// the live `families/{id}/alerts` feed when connected; shows sample alerts in
-/// demo mode.
+/// Recent notable events — only a blocked website visit or an app-tampering /
+/// removal attempt. Alerts are grouped under each child's name. Reads the live
+/// `families/{id}/alerts` feed when connected; shows sample alerts in demo mode.
 class AlertsScreen extends StatelessWidget {
   const AlertsScreen({super.key, this.uid});
 
@@ -22,23 +22,23 @@ class AlertsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Alerts')),
-      body: _live ? _LiveAlerts(uid: uid!) : _demoList(),
+      body: _live ? _LiveAlerts(uid: uid!) : _demoBody(),
     );
   }
 
-  Widget _demoList() => ListView(
-        padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
-        children: [
-          for (var i = 0; i < demoAlerts.length; i++) ...[
-            _AlertCard(alert: demoAlerts[i]),
-            if (i < demoAlerts.length - 1) const SizedBox(height: AppSpacing.sm),
-          ],
-        ],
-      );
+  Widget _demoBody() {
+    final relevant =
+        demoAlerts.where((a) => a.type != AlertType.unknown).toList();
+    if (relevant.isEmpty) return _EmptyAlerts();
+    return _GroupedAlerts(
+      alerts: relevant,
+      nameFor: (id) => demoAlertChildNames[id] ?? 'Child',
+    );
+  }
 }
 
-/// Resolves the guardian's first family, then streams its alert feed.
+/// Resolves the guardian's first family, then streams its children (for names)
+/// and its alert feed, grouped per child.
 class _LiveAlerts extends StatelessWidget {
   const _LiveAlerts({required this.uid});
   final String uid;
@@ -53,28 +53,105 @@ class _LiveAlerts extends StatelessWidget {
         }
         final families = famSnap.data ?? const <FamilyModel>[];
         if (families.isEmpty) return _EmptyAlerts();
-        return StreamBuilder<List<Alert>>(
-          stream: AlertsRepository.instance.watch(families.first.id),
-          builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            final alerts = snap.data ?? const <Alert>[];
-            if (alerts.isEmpty) return _EmptyAlerts();
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md,
-                  AppSpacing.md, AppSpacing.xxl),
-              children: [
-                for (var i = 0; i < alerts.length; i++) ...[
-                  _AlertCard(alert: alerts[i]),
-                  if (i < alerts.length - 1)
-                    const SizedBox(height: AppSpacing.sm),
-                ],
-              ],
+        final familyId = families.first.id;
+        return StreamBuilder<List<Child>>(
+          stream: FamilyRepository.instance.watchChildren(familyId),
+          builder: (context, kidSnap) {
+            final names = <String, String>{
+              for (final c in (kidSnap.data ?? const <Child>[])) c.id: c.name,
+            };
+            return StreamBuilder<List<Alert>>(
+              stream: AlertsRepository.instance.watch(familyId),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                final relevant = (snap.data ?? const <Alert>[])
+                    .where((a) => a.type != AlertType.unknown)
+                    .toList();
+                if (relevant.isEmpty) return _EmptyAlerts();
+                return _GroupedAlerts(
+                  alerts: relevant,
+                  nameFor: (id) => names[id] ?? 'Device',
+                );
+              },
             );
           },
         );
       },
+    );
+  }
+}
+
+/// Renders alerts grouped under each child's name, children ordered by their
+/// most recent alert (the incoming list is newest-first).
+class _GroupedAlerts extends StatelessWidget {
+  const _GroupedAlerts({required this.alerts, required this.nameFor});
+  final List<Alert> alerts;
+  final String Function(String childId) nameFor;
+
+  @override
+  Widget build(BuildContext context) {
+    final order = <String>[];
+    final byChild = <String, List<Alert>>{};
+    for (final a in alerts) {
+      byChild.putIfAbsent(a.childId, () {
+        order.add(a.childId);
+        return <Alert>[];
+      }).add(a);
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
+      children: [
+        for (final childId in order) ...[
+          _ChildHeader(
+              name: nameFor(childId), count: byChild[childId]!.length),
+          const SizedBox(height: AppSpacing.sm),
+          for (final a in byChild[childId]!) ...[
+            _AlertCard(alert: a),
+            const SizedBox(height: AppSpacing.sm),
+          ],
+          const SizedBox(height: AppSpacing.md),
+        ],
+      ],
+    );
+  }
+}
+
+class _ChildHeader extends StatelessWidget {
+  const _ChildHeader({required this.name, required this.count});
+  final String name;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Icon(Icons.person_rounded, size: 18, color: AppColors.primary),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(name,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700)),
+        ),
+        const SizedBox(width: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: AppColors.danger.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+          ),
+          child: Text('$count',
+              style: const TextStyle(
+                  color: AppColors.danger,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12)),
+        ),
+      ],
     );
   }
 }

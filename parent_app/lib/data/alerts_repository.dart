@@ -24,6 +24,7 @@ class AlertsRepository {
                 alertTypeFromId(m['type'] as String?),
                 (m['detail'] ?? '').toString(),
                 at != null ? timeAgo(at) : 'just now',
+                childId: (m['childId'] ?? '').toString(),
               );
             }).toList());
   }

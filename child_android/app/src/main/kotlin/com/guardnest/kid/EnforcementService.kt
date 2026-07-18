@@ -125,19 +125,6 @@ class EnforcementService : Service() {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 reportInstalledApps()
-                if (intent?.action == Intent.ACTION_PACKAGE_ADDED &&
-                    !intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
-                ) {
-                    val pkg = intent.data?.schemeSpecificPart
-                    if (pkg != null && pkg != packageName) {
-                        AlertLog.log(
-                            this@EnforcementService,
-                            "appInstalled",
-                            "Installed ${AlertLog.appLabel(this@EnforcementService, pkg)}",
-                            throttleKey = "install:$pkg",
-                        )
-                    }
-                }
             }
         }
         val filter = IntentFilter().apply {
@@ -679,19 +666,17 @@ class EnforcementService : Service() {
 
     /** Logs a tamper-evident alert the parent sees on their next check-in. */
     private fun writeProtectionAlert(type: String) {
-        val (t, detail) = when (type) {
-            "protection_disabled" -> "secureModeOn" to "Entered Secure App Mode"
-            "protection_restored" -> "secureModeOff" to "Returned to normal"
-            else -> type to ""
-        }
+        // Only a tamper event (a protection being turned off) is surfaced as an
+        // alert. Restoring protection is not alerted.
+        if (type != "protection_disabled") return
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
         FirebaseFirestore.getInstance()
             .collection("families").document(familyId)
             .collection("alerts").add(
                 mapOf(
-                    "type" to t,
-                    "detail" to detail,
+                    "type" to "tamper",
+                    "detail" to "Protection was turned off",
                     "childId" to childId,
                     "protections" to offProtections(),
                     "at" to FieldValue.serverTimestamp(),

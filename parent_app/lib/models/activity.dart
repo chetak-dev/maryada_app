@@ -2,27 +2,20 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// Kinds of alert surfaced to the guardian.
+/// Kinds of alert surfaced to the guardian. Deliberately narrow: only a blocked
+/// website visit or a tamper/removal attempt raises an alert.
 enum AlertType {
-  blockedApp,
   blockedWebsite,
-  protectionOff,
-  permissionRemoved,
-  secureModeOn,
-  secureModeOff,
-  appInstalled,
+  tamper,
   unknown,
 }
 
-/// Parses the string `type` stored on an alert document.
+/// Parses the string `type` stored on an alert document (with a couple of
+/// legacy tamper-ish types mapped to [AlertType.tamper]).
 AlertType alertTypeFromId(String? id) => switch (id) {
-      'blockedApp' => AlertType.blockedApp,
       'blockedWebsite' => AlertType.blockedWebsite,
-      'protectionOff' => AlertType.protectionOff,
-      'permissionRemoved' => AlertType.permissionRemoved,
-      'secureModeOn' => AlertType.secureModeOn,
-      'secureModeOff' => AlertType.secureModeOff,
-      'appInstalled' => AlertType.appInstalled,
+      'tamper' || 'protectionOff' || 'protection_disabled' || 'secureModeOn' =>
+        AlertType.tamper,
       _ => AlertType.unknown,
     };
 
@@ -38,35 +31,20 @@ String timeAgo(DateTime at) {
 
 extension AlertTypeUi on AlertType {
   String get label => switch (this) {
-        AlertType.blockedApp => 'Blocked app opened',
         AlertType.blockedWebsite => 'Blocked website',
-        AlertType.protectionOff => 'Protection was turned off',
-        AlertType.permissionRemoved => 'Permission removed',
-        AlertType.secureModeOn => 'Entered Secure App Mode',
-        AlertType.secureModeOff => 'Returned to normal',
-        AlertType.appInstalled => 'New app installed',
+        AlertType.tamper => 'App tampering',
         AlertType.unknown => 'Alert',
       };
 
   IconData get icon => switch (this) {
-        AlertType.blockedApp => Icons.block_rounded,
         AlertType.blockedWebsite => Icons.public_off_rounded,
-        AlertType.protectionOff => Icons.gpp_bad_rounded,
-        AlertType.permissionRemoved => Icons.remove_moderator_rounded,
-        AlertType.secureModeOn => Icons.lock_rounded,
-        AlertType.secureModeOff => Icons.lock_open_rounded,
-        AlertType.appInstalled => Icons.download_rounded,
+        AlertType.tamper => Icons.gpp_bad_rounded,
         AlertType.unknown => Icons.notifications_rounded,
       };
 
   Color get color => switch (this) {
-        AlertType.blockedApp => AppColors.danger,
         AlertType.blockedWebsite => AppColors.danger,
-        AlertType.protectionOff => AppColors.danger,
-        AlertType.permissionRemoved => AppColors.warning,
-        AlertType.secureModeOn => AppColors.primary,
-        AlertType.secureModeOff => AppColors.success,
-        AlertType.appInstalled => AppColors.info,
+        AlertType.tamper => AppColors.danger,
         AlertType.unknown => AppColors.info,
       };
 }
@@ -75,7 +53,8 @@ class Alert {
   final AlertType type;
   final String detail;
   final String timeAgo;
-  const Alert(this.type, this.detail, this.timeAgo);
+  final String childId;
+  const Alert(this.type, this.detail, this.timeAgo, {this.childId = ''});
 }
 
 /// One day's total screen time (minutes) for the weekly bar chart.
@@ -96,10 +75,14 @@ const demoWeekUsage = <DailyUsage>[
 ];
 
 const demoAlerts = <Alert>[
-  Alert(AlertType.blockedApp, 'Tried to open TikTok', '10:15 AM'),
-  Alert(AlertType.blockedWebsite, 'Blocked badsite.com', '3:05 PM'),
-  Alert(AlertType.secureModeOn, 'Started using a banking app', '1:20 PM'),
-  Alert(AlertType.secureModeOff, 'Back to normal protection', '1:34 PM'),
-  Alert(AlertType.appInstalled, 'Installed Instagram', '11:02 AM'),
-  Alert(AlertType.protectionOff, 'Monitoring was turned off', '9:48 AM'),
+  Alert(AlertType.blockedWebsite, 'Visited a blocked site (badsite.com)',
+      '10:15 AM',
+      childId: 'c1'),
+  Alert(AlertType.tamper, 'Tried to remove or disable protection', '9:48 AM',
+      childId: 'c1'),
+  Alert(AlertType.blockedWebsite, 'Blocked a page (unsafe content)', '3:05 PM',
+      childId: 'c2'),
 ];
+
+/// Demo child names for the sample alerts (keyed by [Alert.childId]).
+const demoAlertChildNames = <String, String>{'c1': 'Alex', 'c2': 'Sam'};

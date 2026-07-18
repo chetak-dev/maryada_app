@@ -95,11 +95,6 @@ class GuardNestAccessibilityService : AccessibilityService() {
             if (pkg != packageName && BlockedApps.isBlocked(pkg)) {
                 // Kick the child out of the blocked app.
                 performGlobalAction(GLOBAL_ACTION_HOME)
-                AlertLog.log(
-                    this, "blockedApp",
-                    "Tried to open ${AlertLog.appLabel(this, pkg)}",
-                    throttleKey = "block:$pkg",
-                )
                 val now = System.currentTimeMillis()
                 if (now - lastToast > 2000) {
                     lastToast = now
@@ -356,6 +351,11 @@ class GuardNestAccessibilityService : AccessibilityService() {
             // of blocking it.
             verifyStillLinked()
             performGlobalAction(GLOBAL_ACTION_BACK)
+            AlertLog.log(
+                this, "tamper",
+                "Tried to remove or disable protection",
+                throttleKey = "tamper:attempt",
+            )
             val now = System.currentTimeMillis()
             if (now - lastTamperToast > 1500) {
                 lastTamperToast = now
@@ -889,6 +889,11 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (!WebFilter.isBlocked(host)) return
         // Leave the blocked site.
         performGlobalAction(GLOBAL_ACTION_BACK)
+        AlertLog.log(
+            this, "blockedWebsite",
+            "Visited a blocked site ($host)",
+            throttleKey = "site:$host",
+        )
         val now = System.currentTimeMillis()
         if (now - lastBlockToast > 1500) {
             lastBlockToast = now
