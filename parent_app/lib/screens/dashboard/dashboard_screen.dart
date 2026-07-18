@@ -64,6 +64,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         children: [
           const _DashboardHero(),
           const SizedBox(height: AppSpacing.lg),
+          _WebFilterAlertBanner(uid: _live ? uid : null),
           _FamilyControls(key: ValueKey('controls_$_sync'), uid: _live ? uid : null),
           const SizedBox(height: AppSpacing.lg),
           _FamilyChildren(
@@ -136,6 +137,91 @@ class _DashboardHero extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A prominent warning shown on the home screen whenever the family's web
+/// filter is turned off, so the parent notices no sites are being blocked.
+class _WebFilterAlertBanner extends StatelessWidget {
+  const _WebFilterAlertBanner({required this.uid});
+  final String? uid;
+
+  @override
+  Widget build(BuildContext context) {
+    if (uid == null || !Db.ready) return const SizedBox.shrink();
+    return StreamBuilder<List<FamilyModel>>(
+      stream: FamilyRepository.instance.watchFamilies(uid!),
+      builder: (context, famSnap) {
+        final fams = famSnap.data ?? const <FamilyModel>[];
+        if (fams.isEmpty) return const SizedBox.shrink();
+        final familyId = fams.first.id;
+        return StreamBuilder<WebFilterSettings>(
+          stream: WebFilterRepository.instance.watch(familyId),
+          builder: (context, snap) {
+            final off = snap.hasData && !snap.data!.enabled;
+            if (!off) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.lg),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(AppRadius.lg),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => WebFilterScreen(familyId: familyId),
+                    ),
+                  ),
+                  child: Container(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: AppColors.danger.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(AppRadius.lg),
+                      border: Border.all(
+                          color: AppColors.danger.withValues(alpha: 0.30)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: AppColors.danger.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(AppRadius.md),
+                          ),
+                          child: const Icon(Icons.gpp_bad_rounded,
+                              color: AppColors.danger, size: 22),
+                        ),
+                        const SizedBox(width: AppSpacing.md),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Web filter is off',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.danger)),
+                              SizedBox(height: 2),
+                              Text(
+                                'No websites are blocked for your child. Tap to turn on.',
+                                style: TextStyle(
+                                    color: AppColors.textSecondary,
+                                    fontSize: 13),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right_rounded,
+                            color: AppColors.danger),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

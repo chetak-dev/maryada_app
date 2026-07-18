@@ -5,6 +5,7 @@ import '../../data/user_repository.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/dialog_buttons.dart';
 import '../admin/admin_home_screen.dart';
 import '../home/home_shell.dart';
 import 'login_screen.dart';
@@ -94,15 +95,10 @@ class _SuspendedScreen extends StatelessWidget {
         title: const Text('Sign out?'),
         content: const Text('You can sign back in anytime with your email.'),
         actions: [
-          TextButton(
-            style:
-                TextButton.styleFrom(foregroundColor: AppColors.textSecondary),
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
+          DialogCancelButton(onPressed: () => Navigator.of(ctx).pop(false)),
+          DialogConfirmButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Sign out'),
+            label: 'Sign out',
           ),
         ],
       ),

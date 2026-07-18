@@ -16,17 +16,40 @@ object ContentFilter {
     /** Parent-defined blocked words (lowercased), from the web-filter rule. */
     @Volatile var parentKeywords: Set<String> = emptySet()
 
-    // Unambiguous adult brands/terms — a single occurrence blocks the page.
+    /** Extra words pushed from the backend (`appConfig/contentFilter`). */
+    @Volatile var backendKeywords: Set<String> = emptySet()
+
+    // Unambiguous terms/brands/phrases — a single occurrence blocks the page.
     private val STRONG = setOf(
+        // Adult brands
         "pornhub", "xvideos", "xnxx", "xhamster", "redtube", "youporn",
         "brazzers", "onlyfans", "hentai", "camgirl", "camsoda", "chaturbate",
+        "spankbang", "redgifs", "child porn",
+        // Gambling brands
+        "1xbet", "bet365", "dafabet", "parimatch", "stake.com", "betway",
+        "melbet", "22bet",
+        // Harmful how-to phrases
+        "how to commit suicide", "ways to kill yourself", "suicide methods",
+        "how to make a bomb", "buy cocaine", "buy heroin online", "buy mdma",
+        "buy lsd", "buy weed online", "buy guns online", "buy a gun online",
     )
 
-    // Generic terms that can appear in legitimate contexts — need several
+    // Generic terms that also appear in legitimate contexts — need several
     // distinct hits before blocking.
     private val WEAK = setOf(
+        // Adult
         "porn", "nsfw", "xxx", "sex video", "sex videos", "adult video",
-        "nude photos", "nude pics", "escort service",
+        "nude photos", "nude pics", "escort service", "sex cam", "camsex",
+        // Gambling
+        "casino", "online casino", "poker", "betting", "roulette", "blackjack",
+        "sportsbook", "jackpot", "wager", "slot machine", "online lottery",
+        // Drugs
+        "cocaine", "heroin", "marijuana", "cannabis", "lsd", "mdma", "ecstasy",
+        "methamphetamine", "buy drugs",
+        // Violence
+        "gore", "beheading", "graphic violence", "extremely graphic",
+        // Weapons
+        "buy firearm", "buy ammunition", "buy handgun",
     )
 
     private const val WEAK_THRESHOLD = 2
@@ -38,8 +61,11 @@ object ContentFilter {
     fun match(textLower: String): String? {
         if (textLower.isBlank()) return null
 
-        // Parent keywords: a single match blocks.
+        // Parent + backend keywords: a single match blocks (curated lists).
         for (w in parentKeywords) {
+            if (w.length >= 3 && textLower.contains(w)) return w
+        }
+        for (w in backendKeywords) {
             if (w.length >= 3 && textLower.contains(w)) return w
         }
 

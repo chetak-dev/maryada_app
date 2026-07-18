@@ -4,6 +4,7 @@ import '../../data/db.dart';
 import '../../data/family_repository.dart';
 import '../../models/child.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/dialog_buttons.dart';
 import '../../widgets/status_pill.dart';
 import '../activity/activity_screen.dart';
 import '../app_rules/app_rules_screen.dart';
@@ -193,13 +194,10 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
-          TextButton(
-              style: TextButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary),
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+          DialogConfirmButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Save'),
+            label: 'Save',
           ),
         ],
       ),

@@ -7,6 +7,7 @@ import '../../models/app_user.dart';
 import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/dialog_buttons.dart';
 import '../../widgets/status_pill.dart';
 
 /// Admin read-only view of a single host: their child limit / status controls
@@ -85,16 +86,13 @@ class HostDetailScreen extends StatelessWidget {
           decoration: const InputDecoration(labelText: 'Max children'),
         ),
         actions: [
-          TextButton(
-              style: TextButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary),
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+          DialogConfirmButton(
             onPressed: () {
               final v = int.tryParse(ctl.text.trim());
               if (v != null && v >= 1 && v <= 100) Navigator.pop(ctx, v);
             },
-            child: const Text('Save'),
+            label: 'Save',
           ),
         ],
       ),

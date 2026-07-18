@@ -7,6 +7,7 @@ import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
+import '../../widgets/dialog_buttons.dart';
 import 'host_detail_screen.dart';
 
 /// The admin console: manage host (parent) accounts and their child limits, and
@@ -22,15 +23,10 @@ class AdminHomeScreen extends StatelessWidget {
         title: const Text('Sign out?'),
         content: const Text('You can sign back in anytime with your email.'),
         actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-                foregroundColor: AppColors.textSecondary),
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
+          DialogCancelButton(onPressed: () => Navigator.of(ctx).pop(false)),
+          DialogConfirmButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Sign out'),
+            label: 'Sign out',
           ),
         ],
       ),
@@ -140,19 +136,14 @@ class AdminHomeScreen extends StatelessWidget {
           ),
         ),
         actions: [
-          TextButton(
-            style: TextButton.styleFrom(
-                foregroundColor: AppColors.textSecondary),
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx, false)),
+          DialogConfirmButton(
             onPressed: () {
               if (formKey.currentState?.validate() ?? false) {
                 Navigator.pop(ctx, true);
               }
             },
-            child: const Text('Create invite'),
+            label: 'Create invite',
           ),
         ],
       ),
@@ -346,16 +337,13 @@ class _HostCard extends StatelessWidget {
           decoration: const InputDecoration(labelText: 'Max children'),
         ),
         actions: [
-          TextButton(
-              style: TextButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary),
-              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+          DialogConfirmButton(
             onPressed: () {
               final v = int.tryParse(ctl.text.trim());
               if (v != null && v >= 1 && v <= 100) Navigator.pop(ctx, v);
             },
-            child: const Text('Save'),
+            label: 'Save',
           ),
         ],
       ),

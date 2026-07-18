@@ -4,16 +4,7 @@ import '../../data/db.dart';
 import '../../data/web_filter_repository.dart';
 import '../../models/web_filter.dart';
 import '../../theme/tokens.dart';
-
-/// The built-in unsafe terms the child app always blocks in page content
-/// (mirrors `ContentFilter` on the Android side). Shown read-only so parents
-/// can see what's covered by default.
-const _builtinBlockedWords = <String>[
-  'pornhub', 'xvideos', 'xnxx', 'xhamster', 'redtube', 'youporn', 'brazzers',
-  'onlyfans', 'hentai', 'camgirl', 'camsoda', 'chaturbate', 'porn', 'nsfw',
-  'xxx', 'sex video', 'sex videos', 'adult video', 'nude photos', 'nude pics',
-  'escort service',
-];
+import '../../widgets/dialog_buttons.dart';
 
 /// Web filter editor: master safe-browsing switch, content-category toggles and
 /// a custom blocklist. Persists to Firestore when [familyId] is set.
@@ -133,16 +124,11 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
             'to visit any site, including unsafe ones. Are you sure?',
           ),
           actions: [
-            TextButton(
-              style: TextButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary),
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            DialogCancelButton(onPressed: () => Navigator.pop(ctx, false)),
+            DialogConfirmButton(
               onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Turn off'),
+              label: 'Turn off',
+              color: AppColors.danger,
             ),
           ],
         ),
@@ -361,35 +347,6 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
                       ],
                     ),
                   ],
-                  const SizedBox(height: AppSpacing.sm),
-                  Theme(
-                    data: Theme.of(context)
-                        .copyWith(dividerColor: Colors.transparent),
-                    child: ExpansionTile(
-                      tilePadding: EdgeInsets.zero,
-                      childrenPadding:
-                          const EdgeInsets.only(bottom: AppSpacing.sm),
-                      expandedCrossAxisAlignment: CrossAxisAlignment.start,
-                      title: const Text(
-                        'Built-in blocked words (always on)',
-                        style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w600),
-                      ),
-                      children: [
-                        Wrap(
-                          spacing: AppSpacing.sm,
-                          runSpacing: AppSpacing.sm,
-                          children: [
-                            for (final w in _builtinBlockedWords)
-                              Chip(
-                                label: Text(w),
-                                backgroundColor: AppColors.surfaceMuted,
-                              ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
                 ],
               ),
             ),

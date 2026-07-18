@@ -47,6 +47,7 @@ class EnforcementService : Service() {
     private var listener: ListenerRegistration? = null
     private var appRulesListener: ListenerRegistration? = null
     private var webFilterListener: ListenerRegistration? = null
+    private var contentFilterListener: ListenerRegistration? = null
     private var childDocListener: ListenerRegistration? = null
     private var currentBlocked: Set<String> = emptySet()
 
@@ -85,6 +86,7 @@ class EnforcementService : Service() {
         attachRuleListener()
         attachAppRulesListener()
         attachWebFilterListener()
+        attachContentFilterListener()
         attachChildDocListener()
         registerPackageChanges()
         DeviceLockdown.applyTamperProtection(this)
@@ -105,6 +107,7 @@ class EnforcementService : Service() {
         listener?.remove()
         appRulesListener?.remove()
         webFilterListener?.remove()
+        contentFilterListener?.remove()
         childDocListener?.remove()
         unregisterPackageChanges()
         LockOverlay.hide(this)
@@ -1019,6 +1022,23 @@ class EnforcementService : Service() {
                 }
                 // The old DNS-filter VPN is no longer used.
                 WebFilterVpnService.stop(this)
+            }
+    }
+
+    /**
+     * Watches the global content-filter config (`appConfig/contentFilter`) so
+     * the built-in page-content keyword lists can be extended from the backend
+     * without shipping an app update.
+     */
+    private fun attachContentFilterListener() {
+        contentFilterListener = FirebaseFirestore.getInstance()
+            .collection("appConfig").document("contentFilter")
+            .addSnapshotListener { snap, _ ->
+                ContentFilter.backendKeywords = (snap?.get("keywords") as? List<*>)
+                    ?.mapNotNull {
+                        (it as? String)?.trim()?.lowercase()?.takeIf { s -> s.length >= 3 }
+                    }
+                    ?.toSet() ?: emptySet()
             }
     }
 
