@@ -21,17 +21,24 @@ object ContentFilter {
 
     // Unambiguous terms/brands/phrases — a single occurrence blocks the page.
     private val STRONG = setOf(
-        // Adult brands
+        // Adult brands / sites
         "pornhub", "xvideos", "xnxx", "xhamster", "redtube", "youporn",
         "brazzers", "onlyfans", "hentai", "camgirl", "camsoda", "chaturbate",
-        "spankbang", "redgifs", "child porn",
-        // Gambling brands
+        "spankbang", "redgifs", "youjizz", "tube8", "motherless", "tnaflix",
+        "eporner", "porntrex", "fapello", "nhentai", "e-hentai", "hqporner",
+        "beeg", "txxx", "hclips", "adultfriendfinder", "stripchat", "bongacams",
+        "livejasmin", "myfreecams", "fansly", "manyvids", "rule34", "child porn",
+        // Gambling brands / sites
         "1xbet", "bet365", "dafabet", "parimatch", "stake.com", "betway",
-        "melbet", "22bet",
+        "melbet", "22bet", "betwinner", "mostbet", "4rabet", "10cric", "casumo",
+        "leovegas", "ladbrokes", "williamhill", "pokerstars", "betfair",
+        "unibet", "888casino", "rummycircle", "pokerbaazi", "sattaking",
         // Harmful how-to phrases
         "how to commit suicide", "ways to kill yourself", "suicide methods",
-        "how to make a bomb", "buy cocaine", "buy heroin online", "buy mdma",
-        "buy lsd", "buy weed online", "buy guns online", "buy a gun online",
+        "how to hang yourself", "painless suicide", "how to make a bomb",
+        "how to make meth", "buy cocaine", "buy heroin online", "buy mdma",
+        "buy lsd", "buy fentanyl", "buy ketamine", "buy weed online",
+        "buy guns online", "buy a gun online", "buy a ghost gun",
     )
 
     // Generic terms that also appear in legitimate contexts — need several
@@ -39,17 +46,28 @@ object ContentFilter {
     private val WEAK = setOf(
         // Adult
         "porn", "nsfw", "xxx", "sex video", "sex videos", "adult video",
-        "nude photos", "nude pics", "escort service", "sex cam", "camsex",
+        "porn video", "nude photos", "nude pics", "nude girls", "naked girls",
+        "escort service", "sex cam", "camsex", "live sex", "sex chat",
+        "webcam girls", "adult webcam", "milf", "blowjob", "threesome",
+        "cumshot", "hardcore porn", "sex tube",
         // Gambling
         "casino", "online casino", "poker", "betting", "roulette", "blackjack",
         "sportsbook", "jackpot", "wager", "slot machine", "online lottery",
+        "free spins", "deposit bonus", "place a bet", "betting odds",
+        "real money casino", "teen patti", "andar bahar", "rummy",
+        "satta matka", "lottery ticket",
         // Drugs
         "cocaine", "heroin", "marijuana", "cannabis", "lsd", "mdma", "ecstasy",
-        "methamphetamine", "buy drugs",
+        "methamphetamine", "buy drugs", "buy weed", "magic mushrooms",
+        "fentanyl", "ketamine", "hashish", "opioids",
         // Violence
         "gore", "beheading", "graphic violence", "extremely graphic",
+        "murder video", "execution video", "torture video", "snuff film",
         // Weapons
-        "buy firearm", "buy ammunition", "buy handgun",
+        "buy firearm", "buy ammunition", "buy handgun", "buy gun", "ghost gun",
+        "buy ammo", "silencer for sale",
+        // Self-harm
+        "self harm", "self-harm", "cutting myself", "pro ana", "thinspo",
     )
 
     private const val WEAK_THRESHOLD = 2

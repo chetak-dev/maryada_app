@@ -1034,7 +1034,9 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (now - lastBlockToast > 1500) {
             lastBlockToast = now
             Toast.makeText(
-                this, "This site is blocked by your parent.", Toast.LENGTH_SHORT
+                this,
+                "Hare Krishna, this website may not be safe for you",
+                Toast.LENGTH_LONG,
             ).show()
         }
     }
@@ -1066,7 +1068,9 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (now - lastContentBlockToast > 1500) {
             lastContentBlockToast = now
             Toast.makeText(
-                this, "This page is blocked by your parent.", Toast.LENGTH_SHORT
+                this,
+                "Hare Krishna, this website may not be safe for you",
+                Toast.LENGTH_LONG,
             ).show()
         }
         AlertLog.log(
