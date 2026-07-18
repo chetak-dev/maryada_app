@@ -1021,13 +1021,15 @@ class GuardNestAccessibilityService : AccessibilityService() {
      *  keyword (e.g. parimatch.com, pornhub.com). */
     private fun enforceWebFilter(addressBarText: String) {
         val host = hostOf(addressBarText) ?: return
-        if (!WebFilter.isBlocked(host) && ContentFilter.matchHost(host) == null) return
+        val brandHit = ContentFilter.matchHost(host)
+        if (!WebFilter.isBlocked(host) && brandHit == null) return
         // Leave the blocked site.
         performGlobalAction(GLOBAL_ACTION_BACK)
         WebHistoryStore.recordBlocked(host)
+        val reason = if (brandHit != null) "matched \u201C$brandHit\u201D" else "on your block list"
         AlertLog.log(
             this, "blockedWebsite",
-            "Visited a blocked site ($host)",
+            "Blocked $host ($reason)",
             throttleKey = "site:$host",
         )
         val now = System.currentTimeMillis()
@@ -1063,8 +1065,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
         val hit = ContentFilter.match(text) ?: return
         // Leave the blocked page.
         performGlobalAction(GLOBAL_ACTION_BACK)
-        hostOf(readBrowserAddress(root, ForegroundApp.packageName) ?: "")
-            ?.let { WebHistoryStore.recordBlocked(it) }
+        val host = hostOf(readBrowserAddress(root, ForegroundApp.packageName) ?: "")
+        if (host != null) WebHistoryStore.recordBlocked(host)
         if (now - lastContentBlockToast > 1500) {
             lastContentBlockToast = now
             Toast.makeText(
@@ -1075,8 +1077,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
         AlertLog.log(
             this, "blockedWebsite",
-            "Blocked a page (unsafe content)",
-            throttleKey = "content:$hit",
+            "Blocked ${host ?: "a page"} (unsafe content: \u201C$hit\u201D)",
+            throttleKey = "content:${host ?: hit}",
         )
     }
 
