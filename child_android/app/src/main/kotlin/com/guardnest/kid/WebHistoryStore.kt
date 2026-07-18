@@ -208,25 +208,17 @@ object WebHistoryStore {
         s = s.substringBefore('?').substringBefore('#')
         s = s.substringBefore(':') // strip any port
         s = s.removePrefix("www.")
+        // Strip only a couple of common "noise" subdomains, keeping the real
+        // host so e.g. maryada.web.app stays intact (was collapsing to web.app).
+        for (p in listOf("m.", "mobile.", "amp.")) {
+            if (s.startsWith(p)) {
+                s = s.substring(p.length)
+                break
+            }
+        }
         if (s.isEmpty() || !s.contains('.') || s.endsWith(".arpa")) return null
         // Reject obviously non-host strings (e.g. leftover query text).
         if (s.any { it != '.' && it != '-' && !it.isLetterOrDigit() }) return null
-        return rootDomain(s)
+        return s
     }
-
-    /** Collapses `m.youtube.com` / `i.ytimg.com` to `youtube.com` / `ytimg.com`. */
-    private fun rootDomain(host: String): String {
-        val parts = host.split('.').filter { it.isNotEmpty() }
-        if (parts.size <= 2) return host
-        val lastTwo = "${parts[parts.size - 2]}.${parts[parts.size - 1]}"
-        val take = if (lastTwo in TWO_LEVEL_TLDS) 3 else 2
-        return parts.takeLast(take).joinToString(".")
-    }
-
-    private val TWO_LEVEL_TLDS: Set<String> = setOf(
-        "co.uk", "org.uk", "ac.uk", "gov.uk", "co.in", "net.in", "org.in",
-        "ac.in", "gov.in", "co.jp", "com.au", "net.au", "org.au", "com.br",
-        "com.cn", "com.mx", "co.nz", "co.za", "com.sg", "com.hk", "co.kr",
-        "com.tr", "com.tw", "com.ua", "co.id", "com.ph", "com.my", "com.pk",
-    )
 }
