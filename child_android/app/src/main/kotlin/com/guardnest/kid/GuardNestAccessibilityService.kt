@@ -89,6 +89,17 @@ class GuardNestAccessibilityService : AccessibilityService() {
             }
         }
     }
+    // Continuous browser guard so blocked sites are caught near-instantly.
+    private val browserGuard = object : Runnable {
+        override fun run() {
+            try {
+                guardBrowserNow()
+            } catch (_: Throwable) {
+            } finally {
+                ytHandler.postDelayed(this, BROWSER_GUARD_MS)
+            }
+        }
+    }
     private val textRecognizer by lazy {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
@@ -866,31 +877,45 @@ class GuardNestAccessibilityService : AccessibilityService() {
             null
         } ?: return
         try {
-            // 1) Fast path: the browser's known URL-bar resource id.
-            for (id in URL_BAR_IDS) {
-                val viewId = if (id.contains(":")) id else "$pkg:id/$id"
-                val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
-                if (nodes.isNullOrEmpty()) continue
-                for (node in nodes) {
-                    val text = node.text?.toString()
-                    if (!text.isNullOrBlank()) {
-                        WebHistoryStore.recordVisit(text)
-                        enforceWebFilter(text)
-                        maybeCaptureBrowserYoutube(root, text)
-                        return
-                    }
-                }
-            }
-            // 2) Generic fallback (browsers we don't have an id for, or a
-            //    collapsed omnibox): find a URL-like node in the top toolbar.
-            val host = findUrlLikeHost(root)
-            if (host != null) {
-                WebHistoryStore.recordVisit(host)
-                enforceWebFilter(host)
-                maybeCaptureBrowserYoutube(root, host)
-            }
+            val addr = readBrowserAddress(root, pkg) ?: return
+            WebHistoryStore.recordVisit(addr)
+            enforceWebFilter(addr)
+            maybeCaptureBrowserYoutube(root, addr)
         } catch (_: Exception) {
         }
+    }
+
+    /** Reads the browser's current address-bar text (URL-bar id first, then a
+     *  generic URL-like node fallback). */
+    private fun readBrowserAddress(root: AccessibilityNodeInfo, pkg: String): String? {
+        for (id in URL_BAR_IDS) {
+            val viewId = if (id.contains(":")) id else "$pkg:id/$id"
+            val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
+            if (nodes.isNullOrEmpty()) continue
+            for (node in nodes) {
+                val text = node.text?.toString()
+                if (!text.isNullOrBlank()) return text
+            }
+        }
+        return findUrlLikeHost(root)
+    }
+
+    /**
+     * Fast, continuous browser guard: while a browser is foreground, re-reads
+     * the address bar and blocks a filtered site immediately — so protection is
+     * near-instant instead of waiting for an accessibility event (which is why
+     * it previously only triggered on a manual refresh).
+     */
+    private fun guardBrowserNow() {
+        val pkg = ForegroundApp.packageName
+        if (pkg.isEmpty() || !ForegroundApp.isBrowserForeground()) return
+        val root = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        } ?: return
+        val addr = readBrowserAddress(root, pkg) ?: return
+        enforceWebFilter(addr)
     }
 
     private var lastBrowserYtTitle: String? = null
@@ -999,6 +1024,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (!WebFilter.isBlocked(host) && ContentFilter.matchHost(host) == null) return
         // Leave the blocked site.
         performGlobalAction(GLOBAL_ACTION_BACK)
+        WebHistoryStore.recordBlocked(host)
         AlertLog.log(
             this, "blockedWebsite",
             "Visited a blocked site ($host)",
@@ -1035,6 +1061,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
         val hit = ContentFilter.match(text) ?: return
         // Leave the blocked page.
         performGlobalAction(GLOBAL_ACTION_BACK)
+        hostOf(readBrowserAddress(root, ForegroundApp.packageName) ?: "")
+            ?.let { WebHistoryStore.recordBlocked(it) }
         if (now - lastContentBlockToast > 1500) {
             lastContentBlockToast = now
             Toast.makeText(
@@ -1065,17 +1093,20 @@ class GuardNestAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         AccessibilityController.service = this
         ytHandler.postDelayed(ytPump, YT_PUMP_MS)
+        ytHandler.postDelayed(browserGuard, BROWSER_GUARD_MS)
     }
 
     override fun onDestroy() {
         AccessibilityController.service = null
         ytHandler.removeCallbacks(ytPump)
+        ytHandler.removeCallbacks(browserGuard)
         super.onDestroy()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         AccessibilityController.service = null
         ytHandler.removeCallbacks(ytPump)
+        ytHandler.removeCallbacks(browserGuard)
         return super.onUnbind(intent)
     }
 
@@ -1095,6 +1126,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
         const val YT_MAX_GAP_MS = 15_000L
         /** How often the watch-time pump ticks while a video plays full-screen. */
         const val YT_PUMP_MS = 8_000L
+        /** How often the browser guard re-checks the address bar for blocked sites. */
+        const val BROWSER_GUARD_MS = 500L
         /** How long a feed video must stay centred before it counts as watched
          *  — only videos actually watched (>30s), not scrolled past, are logged. */
         const val FEED_DWELL_MS = 30_000L
