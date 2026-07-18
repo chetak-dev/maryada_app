@@ -991,10 +991,12 @@ class GuardNestAccessibilityService : AccessibilityService() {
         return fallback
     }
 
-    /** Blocks the page (leaves the site) when the address-bar host is filtered. */
+    /** Blocks the page (leaves the site) when the address-bar host is filtered
+     *  by the parent's rule, or the domain itself contains a blocked brand
+     *  keyword (e.g. parimatch.com, pornhub.com). */
     private fun enforceWebFilter(addressBarText: String) {
         val host = hostOf(addressBarText) ?: return
-        if (!WebFilter.isBlocked(host)) return
+        if (!WebFilter.isBlocked(host) && ContentFilter.matchHost(host) == null) return
         // Leave the blocked site.
         performGlobalAction(GLOBAL_ACTION_BACK)
         AlertLog.log(

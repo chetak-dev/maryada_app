@@ -86,4 +86,26 @@ object ContentFilter {
         }
         return null
     }
+
+    /**
+     * Matches a bare host/domain against the parent, backend and STRONG lists
+     * (single-word terms only) — so a site like parimatch.com / pornhub.com is
+     * blocked by its domain even when the brand appears only as a logo image and
+     * never as page text. Generic "weak" words are intentionally excluded here
+     * to avoid blocking innocent domains (e.g. gore-tex.com).
+     */
+    fun matchHost(host: String): String? {
+        if (host.isBlank()) return null
+        val h = host.lowercase()
+        for (w in parentKeywords) {
+            if (w.length >= 3 && !w.contains(' ') && h.contains(w)) return w
+        }
+        for (w in backendKeywords) {
+            if (w.length >= 3 && !w.contains(' ') && h.contains(w)) return w
+        }
+        for (t in STRONG) {
+            if (!t.contains(' ') && h.contains(t)) return t
+        }
+        return null
+    }
 }
