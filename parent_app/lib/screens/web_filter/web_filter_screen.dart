@@ -5,6 +5,16 @@ import '../../data/web_filter_repository.dart';
 import '../../models/web_filter.dart';
 import '../../theme/tokens.dart';
 
+/// The built-in unsafe terms the child app always blocks in page content
+/// (mirrors `ContentFilter` on the Android side). Shown read-only so parents
+/// can see what's covered by default.
+const _builtinBlockedWords = <String>[
+  'pornhub', 'xvideos', 'xnxx', 'xhamster', 'redtube', 'youporn', 'brazzers',
+  'onlyfans', 'hentai', 'camgirl', 'camsoda', 'chaturbate', 'porn', 'nsfw',
+  'xxx', 'sex video', 'sex videos', 'adult video', 'nude photos', 'nude pics',
+  'escort service',
+];
+
 /// Web filter editor: master safe-browsing switch, content-category toggles and
 /// a custom blocklist. Persists to Firestore when [familyId] is set.
 class WebFilterScreen extends StatefulWidget {
@@ -182,6 +192,40 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
               onChanged: _toggleSafeBrowsing,
             ),
           ),
+          const SizedBox(height: AppSpacing.sm),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            decoration: BoxDecoration(
+              color: (_enabled ? AppColors.success : AppColors.danger)
+                  .withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  _enabled
+                      ? Icons.verified_user_rounded
+                      : Icons.gpp_bad_rounded,
+                  color: _enabled ? AppColors.success : AppColors.danger,
+                  size: 20,
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(
+                    _enabled
+                        ? 'On — your child is protected. Unsafe sites are blocked.'
+                        : 'Off — no websites are blocked. Your child can visit any site.',
+                    style: TextStyle(
+                      color: _enabled ? AppColors.success : AppColors.danger,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: AppSpacing.lg),
           Opacity(
             opacity: _enabled ? 1 : 0.5,
@@ -317,6 +361,35 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
                       ],
                     ),
                   ],
+                  const SizedBox(height: AppSpacing.sm),
+                  Theme(
+                    data: Theme.of(context)
+                        .copyWith(dividerColor: Colors.transparent),
+                    child: ExpansionTile(
+                      tilePadding: EdgeInsets.zero,
+                      childrenPadding:
+                          const EdgeInsets.only(bottom: AppSpacing.sm),
+                      expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                      title: const Text(
+                        'Built-in blocked words (always on)',
+                        style: TextStyle(
+                            fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                      children: [
+                        Wrap(
+                          spacing: AppSpacing.sm,
+                          runSpacing: AppSpacing.sm,
+                          children: [
+                            for (final w in _builtinBlockedWords)
+                              Chip(
+                                label: Text(w),
+                                backgroundColor: AppColors.surfaceMuted,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
