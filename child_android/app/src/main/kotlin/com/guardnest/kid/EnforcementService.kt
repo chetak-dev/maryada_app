@@ -80,6 +80,8 @@ class EnforcementService : Service() {
     override fun onCreate() {
         super.onCreate()
         startAsForeground()
+        YoutubeStore.init(this)
+        WebHistoryStore.init(this)
         attachRuleListener()
         attachAppRulesListener()
         attachWebFilterListener()

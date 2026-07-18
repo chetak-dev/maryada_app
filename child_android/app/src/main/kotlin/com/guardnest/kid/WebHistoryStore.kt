@@ -1,5 +1,9 @@
 package com.guardnest.kid
 
+import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
+
 /**
  * Central store for the child's web history.
  *
@@ -18,8 +22,10 @@ object WebHistoryStore {
         var count: Int = 0
     }
 
-    private const val MAX = 60
+    private const val MAX = 200
     private const val ACTIVE_GAP_MS = 5 * 60 * 1000L
+    private const val RETAIN_MS = 31L * 24 * 60 * 60 * 1000 // ~1 month
+    private const val FILE = "web_history.json"
 
     private val lock = Any()
     private val visited = LinkedHashMap<String, Stat>()
@@ -28,6 +34,16 @@ object WebHistoryStore {
     // Time-on-site tracking for the currently open page.
     private var activeDomain: String? = null
     private var activeSince = 0L
+    private var appCtx: Context? = null
+
+    /** Loads persisted history once, so retained data survives restarts. */
+    fun init(ctx: Context) {
+        synchronized(lock) {
+            if (appCtx != null) return
+            appCtx = ctx.applicationContext
+            load()
+        }
+    }
     @Volatile private var dirty = false
 
     /** Records an actual page visit (from the browser address bar). */
@@ -88,6 +104,8 @@ object WebHistoryStore {
                     activeSince = now
                 }
             }
+            trim(visited)
+            trim(blocked)
             val visitedList = visited.entries.sortedByDescending { it.value.lastAt }
                 .map {
                     mapOf<String, Any>(
@@ -106,12 +124,77 @@ object WebHistoryStore {
                     )
                 }
             dirty = false
+            save()
             return visitedList to blockedList
         }
     }
 
     private fun trim(map: LinkedHashMap<String, Stat>) {
-        while (map.size > MAX) map.remove(map.keys.iterator().next())
+        val cutoff = System.currentTimeMillis() - RETAIN_MS
+        val it = map.entries.iterator()
+        while (it.hasNext()) {
+            if (it.next().value.lastAt < cutoff) it.remove()
+        }
+        if (map.size > MAX) {
+            val oldestFirst = map.entries.sortedBy { it.value.lastAt }
+            val toRemove = map.size - MAX
+            for (i in 0 until toRemove) map.remove(oldestFirst[i].key)
+        }
+    }
+
+    // ---- Persistence ------------------------------------------------------
+
+    private fun save() {
+        val ctx = appCtx ?: return
+        try {
+            fun arrayOf(map: LinkedHashMap<String, Stat>): JSONArray {
+                val arr = JSONArray()
+                for ((domain, s) in map) {
+                    arr.put(
+                        JSONObject()
+                            .put("domain", domain)
+                            .put("at", s.lastAt)
+                            .put("totalMs", s.totalMs)
+                            .put("count", s.count)
+                    )
+                }
+                return arr
+            }
+            val root = JSONObject()
+                .put("visited", arrayOf(visited))
+                .put("blocked", arrayOf(blocked))
+            ctx.openFileOutput(FILE, Context.MODE_PRIVATE).use {
+                it.write(root.toString().toByteArray())
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun load() {
+        val ctx = appCtx ?: return
+        try {
+            if (!ctx.getFileStreamPath(FILE).exists()) return
+            val text = ctx.openFileInput(FILE).bufferedReader().use { it.readText() }
+            val root = JSONObject(text)
+            val cutoff = System.currentTimeMillis() - RETAIN_MS
+            fun fill(map: LinkedHashMap<String, Stat>, arr: JSONArray?) {
+                if (arr == null) return
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    val at = o.optLong("at")
+                    if (at < cutoff) continue
+                    val domain = o.optString("domain")
+                    if (domain.isEmpty()) continue
+                    val s = Stat(at)
+                    s.totalMs = o.optLong("totalMs")
+                    s.count = o.optInt("count")
+                    map[domain] = s
+                }
+            }
+            fill(visited, root.optJSONArray("visited"))
+            fill(blocked, root.optJSONArray("blocked"))
+        } catch (_: Exception) {
+        }
     }
 
     /** Extracts a clean registrable host from a raw address-bar / domain string. */
