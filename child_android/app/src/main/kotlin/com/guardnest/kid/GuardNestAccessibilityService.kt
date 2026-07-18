@@ -1,10 +1,14 @@
 package com.guardnest.kid
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -69,7 +73,22 @@ class GuardNestAccessibilityService : AccessibilityService() {
     @Volatile private var shotInFlight = false
     // YouTube watch-time tracking (current video + last capture time).
     private var lastYtTitle: String? = null
+    private var lastYtChannel: String? = null
     private var lastYtTickAt = 0L
+    // True while a full watch page is/was playing, so watch time keeps counting
+    // when the video goes full-screen and its on-screen title disappears.
+    private var ytActivePlayback = false
+    private val ytHandler = Handler(Looper.getMainLooper())
+    private val ytPump = object : Runnable {
+        override fun run() {
+            try {
+                pumpYoutubeWatchTime()
+            } catch (_: Throwable) {
+            } finally {
+                ytHandler.postDelayed(this, YT_PUMP_MS)
+            }
+        }
+    }
     private val textRecognizer by lazy {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
@@ -181,6 +200,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
                     ?.takeIf { !it.contains("views", true) && it.lowercase() !in YT_NOISE }
                 ?: ""
             recordYt(title, channel)
+            ytActivePlayback = true
             true
         } catch (_: Exception) {
             false
@@ -239,6 +259,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
             return
         }
         if (now - lastFeedSince < FEED_DWELL_MS) return
+        ytActivePlayback = false
         recordYt(title, channel)
     }
 
@@ -290,6 +311,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
         val title = caption
             ?: channel.takeIf { it.isNotEmpty() }?.let { "Short from $it" }
             ?: return false
+        ytActivePlayback = false
         recordYt(title, channel)
         return true
     }
@@ -304,8 +326,28 @@ class GuardNestAccessibilityService : AccessibilityService() {
             if (d in 1..YT_MAX_GAP_MS) d else 0L
         } else 0L
         lastYtTitle = title
+        if (channel.isNotBlank()) lastYtChannel = channel
         lastYtTickAt = now
         YoutubeStore.record(title, channel, addMs)
+    }
+
+    /**
+     * Keeps accumulating watch time for the current video while it plays
+     * full-screen (when the on-screen title/metadata disappears). Only runs
+     * while a real watch page was last seen, YouTube is still foreground and the
+     * screen is on — so it won't count time after the child leaves or the screen
+     * locks.
+     */
+    private fun pumpYoutubeWatchTime() {
+        if (!ytActivePlayback) return
+        val title = lastYtTitle ?: return
+        if (ForegroundApp.packageName !in YOUTUBE_PKGS) {
+            ytActivePlayback = false
+            return
+        }
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm != null && !pm.isInteractive) return // screen off — not watching
+        recordYt(title, lastYtChannel ?: "")
     }
 
     /** Depth-first collects up to a few visible text lines from a node subtree. */
@@ -1020,15 +1062,18 @@ class GuardNestAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         AccessibilityController.service = this
+        ytHandler.postDelayed(ytPump, YT_PUMP_MS)
     }
 
     override fun onDestroy() {
         AccessibilityController.service = null
+        ytHandler.removeCallbacks(ytPump)
         super.onDestroy()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         AccessibilityController.service = null
+        ytHandler.removeCallbacks(ytPump)
         return super.onUnbind(intent)
     }
 
@@ -1046,7 +1091,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
 
         /** Max gap between YouTube captures still counted as continuous watching. */
         const val YT_MAX_GAP_MS = 15_000L
-
+        /** How often the watch-time pump ticks while a video plays full-screen. */
+        const val YT_PUMP_MS = 8_000L
         /** How long a feed video must stay centred before it counts as watched
          *  — only videos actually watched (>30s), not scrolled past, are logged. */
         const val FEED_DWELL_MS = 30_000L
