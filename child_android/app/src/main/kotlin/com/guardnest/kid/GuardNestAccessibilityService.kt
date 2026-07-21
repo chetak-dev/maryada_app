@@ -158,6 +158,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
         // For a browser, read the address bar and record the visited site.
         if (pkg != packageName && ForegroundApp.isBrowserForeground()) {
             if (guardIncognito()) return
+            // Enforce first, reading the URL across ALL windows (the toolbar and
+            // page are separate windows), so a bad site is blocked on load — not
+            // only after a refresh.
+            guardBrowserNow()
             captureBrowserUrl(pkg)
             scanPageContent()
         }
