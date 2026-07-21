@@ -158,12 +158,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
         // For a browser, read the address bar and record the visited site.
         if (pkg != packageName && ForegroundApp.isBrowserForeground()) {
             if (guardIncognito()) return
-            // Enforce first, reading the URL across ALL windows (the toolbar and
-            // page are separate windows), so a bad site is blocked on load — not
-            // only after a refresh.
+            // Enforce first (URL across all windows + page-text keyword scan) so
+            // a bad site is blocked on load, not only after a refresh.
             guardBrowserNow()
             captureBrowserUrl(pkg)
-            scanPageContent()
         }
 
         // For a messaging app (WhatsApp only), read the visible on-screen chat text.
@@ -938,8 +936,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
     private fun guardBrowserNow() {
         val pkg = ForegroundApp.packageName
         if (pkg.isEmpty() || !ForegroundApp.isBrowserForeground()) return
-        val addr = readAnyBrowserAddress(pkg) ?: return
-        enforceWebFilter(addr)
+        val addr = readAnyBrowserAddress(pkg)
+        if (addr != null) enforceWebFilter(addr)
+        // Also scan the page text for blocked keywords (throttled internally).
+        scanPageContent()
     }
 
     private var lastBrowserYtTitle: String? = null
@@ -1074,22 +1074,36 @@ class GuardNestAccessibilityService : AccessibilityService() {
      * Scans the browser's *visible page text* for unsafe content and bounces
      * out of the page if it matches ([ContentFilter]). This is content-based
      * blocking that works on HTTPS (it reads the rendered text, not the network)
-     * and complements the URL/host filter. Throttled for performance.
+     * and complements the URL/host filter. Reads text across ALL windows — the
+     * browser toolbar and the web page are separate windows, so reading only the
+     * active window would miss the page's own text. Throttled for performance.
      */
     private fun scanPageContent() {
         val now = System.currentTimeMillis()
         if (now - lastContentScan < 1200L) return
         lastContentScan = now
-        val root = try {
-            rootInActiveWindow
+        val sb = StringBuilder()
+        try {
+            for (w in windows) {
+                val r = w.root ?: continue
+                collectText(r, sb, 0)
+                if (sb.length > 6000) break
+            }
         } catch (_: Exception) {
-            null
-        } ?: return
-        val text = collectText(root, StringBuilder(), 0).toString().lowercase()
+        }
+        if (sb.isEmpty()) {
+            val root = try {
+                rootInActiveWindow
+            } catch (_: Exception) {
+                null
+            } ?: return
+            collectText(root, sb, 0)
+        }
+        val text = sb.toString().lowercase()
         val hit = ContentFilter.match(text) ?: return
         // Leave the blocked page.
         performGlobalAction(GLOBAL_ACTION_BACK)
-        val host = hostOf(readBrowserAddress(root, ForegroundApp.packageName) ?: "")
+        val host = hostOf(readAnyBrowserAddress(ForegroundApp.packageName) ?: "")
         if (host != null) WebHistoryStore.recordBlocked(host)
         if (now - lastContentBlockToast > 1500) {
             lastContentBlockToast = now
