@@ -28,11 +28,13 @@ object ContentFilter {
         "eporner", "porntrex", "fapello", "nhentai", "e-hentai", "hqporner",
         "beeg", "txxx", "hclips", "adultfriendfinder", "stripchat", "bongacams",
         "livejasmin", "myfreecams", "fansly", "manyvids", "rule34", "child porn",
-        // Gambling brands / sites
+        // Gambling brands / sites + unambiguous betting UI terms (single hit)
         "1xbet", "bet365", "dafabet", "parimatch", "stake.com", "betway",
         "melbet", "22bet", "betwinner", "mostbet", "4rabet", "10cric", "casumo",
         "leovegas", "ladbrokes", "williamhill", "pokerstars", "betfair",
         "unibet", "888casino", "rummycircle", "pokerbaazi", "sattaking",
+        "price boost", "bet slip", "betslip", "bet builder", "in-play betting",
+        "sportsbook", "live betting",
         // Harmful how-to phrases
         "how to commit suicide", "ways to kill yourself", "suicide methods",
         "how to hang yourself", "painless suicide", "how to make a bomb",
@@ -52,10 +54,11 @@ object ContentFilter {
         "cumshot", "hardcore porn", "sex tube",
         // Gambling
         "casino", "online casino", "poker", "betting", "roulette", "blackjack",
-        "sportsbook", "jackpot", "wager", "slot machine", "online lottery",
-        "free spins", "deposit bonus", "place a bet", "betting odds",
+        "jackpot", "wager", "slot machine", "online lottery",
+        "free spins", "place a bet", "betting odds", "deposit bonus",
         "real money casino", "teen patti", "andar bahar", "rummy",
-        "satta matka", "lottery ticket",
+        "satta matka", "lottery ticket", "cash out", "accumulator",
+        "match odds", "free bet", "betting tips", "in-play",
         // Drugs
         "cocaine", "heroin", "marijuana", "cannabis", "lsd", "mdma", "ecstasy",
         "methamphetamine", "buy drugs", "buy weed", "magic mushrooms",
