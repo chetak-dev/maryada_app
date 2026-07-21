@@ -18,8 +18,18 @@ object ChildStore {
     private const val KEY_LOCKBOX_SINCE = "lockboxSince"
     private const val KEY_LOCKBOX_SUSPENDED = "lockboxSuspended"
 
+    // UI theme: "system" (default), "light" or "dark".
+    private const val KEY_THEME = "themeMode"
+
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    fun themeMode(ctx: Context): String =
+        prefs(ctx).getString(KEY_THEME, "system") ?: "system"
+
+    fun setThemeMode(ctx: Context, mode: String) {
+        prefs(ctx).edit().putString(KEY_THEME, mode).apply()
+    }
 
     fun save(ctx: Context, familyId: String, childId: String) {
         prefs(ctx).edit()

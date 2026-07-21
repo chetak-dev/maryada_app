@@ -5,6 +5,7 @@ import '../../theme/theme_controller.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/dialog_buttons.dart';
+import '../../widgets/theme_toggle_button.dart';
 import '../publish_update/publish_update_screen.dart';
 
 /// Account & app management. Hosts the actions that used to live in the
@@ -41,7 +42,10 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(
+        title: const Text('Settings'),
+        actions: const [ThemeToggleButton(), SizedBox(width: AppSpacing.xs)],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),

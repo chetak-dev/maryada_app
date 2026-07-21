@@ -15,6 +15,7 @@ import '../../models/screen_time_rule.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/status_pill.dart';
+import '../../widgets/theme_toggle_button.dart';
 import '../add_child/add_child_screen.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../child_detail/child_detail_screen.dart';
@@ -57,6 +58,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         titleSpacing: AppSpacing.md,
         title: const BrandLockup(markSize: 32),
+        actions: const [ThemeToggleButton(), SizedBox(width: AppSpacing.xs)],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(

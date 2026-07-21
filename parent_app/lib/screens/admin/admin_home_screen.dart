@@ -8,6 +8,7 @@ import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/dialog_buttons.dart';
+import '../../widgets/theme_toggle_button.dart';
 import 'host_detail_screen.dart';
 
 /// The admin console: manage host (parent) accounts and their child limits, and
@@ -57,6 +58,7 @@ class AdminHomeScreen extends StatelessWidget {
           ],
         ),
         actions: [
+          const ThemeToggleButton(),
           IconButton(
             tooltip: 'Sign out',
             icon: const Icon(Icons.logout_rounded),

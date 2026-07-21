@@ -82,10 +82,14 @@ class MainActivity : Activity() {
     }
 
     // Colors — "Royal & Warm" palette (mirrors the parent app). Follows the
-    // device's system light/dark setting.
+    // in-app light/dark choice, falling back to the device's system setting.
     private val isDark: Boolean by lazy {
-        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
-            Configuration.UI_MODE_NIGHT_YES
+        when (ChildStore.themeMode(this)) {
+            "dark" -> true
+            "light" -> false
+            else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                Configuration.UI_MODE_NIGHT_YES
+        }
     }
 
     /** Picks a light- or dark-mode colour. */
@@ -299,6 +303,9 @@ class MainActivity : Activity() {
         header.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            )
             addView(TextView(this@MainActivity).apply {
                 text = "Maryada"
                 setTextColor(Color.WHITE)
@@ -310,6 +317,24 @@ class MainActivity : Activity() {
                 setTextColor(Color.parseColor("#E0E7FF"))
                 textSize = 13f
             })
+        })
+
+        // Light/dark toggle — always available at the front.
+        header.addView(TextView(this).apply {
+            text = if (isDark) "\u2600\uFE0F" else "\uD83C\uDF19" // sun / moon
+            textSize = 20f
+            gravity = Gravity.CENTER
+            val size = dp(44)
+            background = rounded(Color.parseColor("#FFFFFF"), dp(14), Color.TRANSPARENT, 0)
+                .apply { alpha = 60 }
+            layoutParams = LinearLayout.LayoutParams(size, size)
+            isClickable = true
+            setOnClickListener {
+                ChildStore.setThemeMode(
+                    this@MainActivity, if (isDark) "light" else "dark"
+                )
+                recreate()
+            }
         })
 
         return header

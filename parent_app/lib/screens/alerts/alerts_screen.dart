@@ -7,6 +7,7 @@ import '../../models/activity.dart';
 import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/theme_toggle_button.dart';
 
 /// Recent notable events — only a blocked website visit or an app-tampering /
 /// removal attempt. Alerts are grouped under each child (collapsed by default).
@@ -21,7 +22,10 @@ class AlertsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Alerts')),
+      appBar: AppBar(
+        title: const Text('Alerts'),
+        actions: const [ThemeToggleButton(), SizedBox(width: AppSpacing.xs)],
+      ),
       body: _live ? _LiveAlerts(uid: uid!) : _EmptyAlerts(),
     );
   }
