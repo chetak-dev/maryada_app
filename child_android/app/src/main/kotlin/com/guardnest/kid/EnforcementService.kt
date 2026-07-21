@@ -994,8 +994,17 @@ class EnforcementService : Service() {
                 val sites = (snap?.get("blockedSites") as? List<*>)
                     ?.mapNotNull { (it as? String)?.lowercase()?.removePrefix("www.") }
                     ?.toSet() ?: emptySet()
-                val cats = (snap?.get("blockedCategories") as? List<*>)
-                    ?.mapNotNull { it as? String }?.toSet() ?: emptySet()
+                // Domain categories. If the parent has never set this field, fall
+                // back to the protective defaults (adult, gambling, drugs, weapons,
+                // violence) so known bad domains are blocked out of the box.
+                val hasCatsField = snap != null && snap.exists() &&
+                    snap.contains("blockedCategories")
+                val cats = if (hasCatsField) {
+                    (snap!!.get("blockedCategories") as? List<*>)
+                        ?.mapNotNull { it as? String }?.toSet() ?: emptySet()
+                } else {
+                    DEFAULT_PROTECTIVE_CATEGORIES
+                }
                 WebFilter.enabled = enabled
                 WebFilter.blockedSites = sites
                 WebFilter.enabledCategories = cats
@@ -1083,6 +1092,10 @@ class EnforcementService : Service() {
         private const val MESSAGES_MS = 30_000L
         private const val YOUTUBE_MS = 30_000L
         private const val UPDATE_CHECK_MS = 3 * 60 * 60 * 1000L // 3 hours
+
+        /** Domain categories blocked by default until the parent customises them. */
+        private val DEFAULT_PROTECTIVE_CATEGORIES =
+            setOf("adult", "gambling", "drugs", "weapons", "violence")
 
         /** Starts the service if this device is paired. */
         fun start(ctx: Context) {
