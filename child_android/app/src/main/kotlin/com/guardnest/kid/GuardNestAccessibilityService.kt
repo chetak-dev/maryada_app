@@ -1082,25 +1082,29 @@ class GuardNestAccessibilityService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (now - lastContentScan < 1200L) return
         lastContentScan = now
-        val sb = StringBuilder()
+        // Match each window's text independently so one text-heavy window can't
+        // use up the character budget before the page's own window is scanned.
+        var hit: String? = null
         try {
             for (w in windows) {
                 val r = w.root ?: continue
-                collectText(r, sb, 0)
-                if (sb.length > 6000) break
+                val t = collectText(r, StringBuilder(), 0).toString().lowercase()
+                hit = ContentFilter.match(t)
+                if (hit != null) break
             }
         } catch (_: Exception) {
         }
-        if (sb.isEmpty()) {
+        if (hit == null) {
             val root = try {
                 rootInActiveWindow
             } catch (_: Exception) {
                 null
             } ?: return
-            collectText(root, sb, 0)
+            hit = ContentFilter.match(
+                collectText(root, StringBuilder(), 0).toString().lowercase()
+            )
         }
-        val text = sb.toString().lowercase()
-        val hit = ContentFilter.match(text) ?: return
+        val matched = hit ?: return
         // Leave the blocked page.
         performGlobalAction(GLOBAL_ACTION_BACK)
         val host = hostOf(readAnyBrowserAddress(ForegroundApp.packageName) ?: "")
@@ -1115,8 +1119,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
         AlertLog.log(
             this, "blockedWebsite",
-            "Blocked ${host ?: "a page"} (unsafe content: \u201C$hit\u201D)",
-            throttleKey = "content:${host ?: hit}",
+            "Blocked ${host ?: "a page"} (unsafe content: \u201C$matched\u201D)",
+            throttleKey = "content:${host ?: matched}",
         )
     }
 
