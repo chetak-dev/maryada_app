@@ -901,20 +901,40 @@ class GuardNestAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Fast, continuous browser guard: while a browser is foreground, re-reads
-     * the address bar and blocks a filtered site immediately — so protection is
-     * near-instant instead of waiting for an accessibility event (which is why
-     * it previously only triggered on a manual refresh).
+     * Reads the browser address bar across ALL accessibility windows. Chrome
+     * (and most browsers) render the toolbar/URL-bar and the web content as
+     * SEPARATE windows, so [rootInActiveWindow] often returns only the web page
+     * — which is why a blocked site previously wasn't caught until a refresh
+     * shifted the active window. Scanning every window makes blocking immediate.
      */
-    private fun guardBrowserNow() {
-        val pkg = ForegroundApp.packageName
-        if (pkg.isEmpty() || !ForegroundApp.isBrowserForeground()) return
+    private fun readAnyBrowserAddress(pkg: String): String? {
+        try {
+            for (w in windows) {
+                val root = w.root ?: continue
+                val addr = readBrowserAddress(root, pkg)
+                if (addr != null) return addr
+            }
+        } catch (_: Exception) {
+        }
         val root = try {
             rootInActiveWindow
         } catch (_: Exception) {
             null
-        } ?: return
-        val addr = readBrowserAddress(root, pkg) ?: return
+        } ?: return null
+        return readBrowserAddress(root, pkg)
+    }
+
+    /**
+     * Fast, continuous browser guard: while a browser is foreground, re-reads
+     * the address bar (across all windows) and blocks a filtered site
+     * immediately — so protection is near-instant instead of waiting for an
+     * accessibility event (which is why it previously only triggered on a
+     * manual refresh).
+     */
+    private fun guardBrowserNow() {
+        val pkg = ForegroundApp.packageName
+        if (pkg.isEmpty() || !ForegroundApp.isBrowserForeground()) return
+        val addr = readAnyBrowserAddress(pkg) ?: return
         enforceWebFilter(addr)
     }
 
@@ -1133,7 +1153,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
         /** How often the watch-time pump ticks while a video plays full-screen. */
         const val YT_PUMP_MS = 8_000L
         /** How often the browser guard re-checks the address bar for blocked sites. */
-        const val BROWSER_GUARD_MS = 500L
+        const val BROWSER_GUARD_MS = 400L
         /** How long a feed video must stay centred before it counts as watched
          *  — only videos actually watched (>30s), not scrolled past, are logged. */
         const val FEED_DWELL_MS = 30_000L

@@ -536,8 +536,16 @@ class EnforcementService : Service() {
             ChildStore.enterLockbox(this, toSuspend, ChildStore.lockboxSince(this))
         }
 
-        // Show GuardNest so the child sees why apps are unavailable (throttled).
-        bringSelfToFront()
+        // Only pull GuardNest to the front when the child is actually in a
+        // non-allowed app. In Temporary Access mode the child intentionally opens
+        // an allowed (e.g. banking) app, so we must NOT keep bouncing them back
+        // to GuardNest while they use it.
+        val fg = foregroundPackage()
+        val fgAllowed = fg == null ||
+            fg == packageName ||
+            isEssential(fg) ||
+            SensitiveApps.isSensitive(fg)
+        if (!fgAllowed) bringSelfToFront()
     }
 
     /**

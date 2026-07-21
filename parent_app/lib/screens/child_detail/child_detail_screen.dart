@@ -137,7 +137,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                   icon: Icons.apps_rounded,
                   color: AppColors.accent,
                   title: 'App rules',
-                  subtitle: 'Block apps, secure app mode',
+                  subtitle: 'Block apps, temp access mode',
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => AppRulesScreen(

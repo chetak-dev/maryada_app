@@ -46,6 +46,9 @@ dependencies:
   # Typography — DM Sans for a clean, warm, modern look.
   google_fonts: ^6.2.1
 
+  # Persist the user's theme choice (system / light / dark).
+  shared_preferences: ^2.3.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

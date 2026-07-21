@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -80,16 +81,26 @@ class MainActivity : Activity() {
         }
     }
 
-    // Colors — "Royal & Warm" palette (mirrors the parent app)
-    private val cPrimary = Color.parseColor("#4338CA")
-    private val cPrimaryDark = Color.parseColor("#312E81")
-    private val cAccent = Color.parseColor("#16A34A")
-    private val cBg = Color.parseColor("#FBF9F6")
-    private val cCard = Color.parseColor("#FFFFFF")
-    private val cInk = Color.parseColor("#1C1917")
-    private val cMuted = Color.parseColor("#78716C")
-    private val cBorder = Color.parseColor("#EAE6DF")
-    private val cDanger = Color.parseColor("#DC2626")
+    // Colors — "Royal & Warm" palette (mirrors the parent app). Follows the
+    // device's system light/dark setting.
+    private val isDark: Boolean by lazy {
+        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+    }
+
+    /** Picks a light- or dark-mode colour. */
+    private fun dk(light: String, dark: String): Int =
+        Color.parseColor(if (isDark) dark else light)
+
+    private val cPrimary by lazy { dk("#4338CA", "#818CF8") }
+    private val cPrimaryDark by lazy { dk("#312E81", "#4338CA") }
+    private val cAccent by lazy { dk("#16A34A", "#22C55E") }
+    private val cBg by lazy { dk("#FBF9F6", "#141220") }
+    private val cCard by lazy { dk("#FFFFFF", "#1E1B2E") }
+    private val cInk by lazy { dk("#1C1917", "#F5F3F0") }
+    private val cMuted by lazy { dk("#78716C", "#A8A29E") }
+    private val cBorder by lazy { dk("#EAE6DF", "#383152") }
+    private val cDanger by lazy { dk("#DC2626", "#F87171") }
 
     // Status card views
     private lateinit var statusBadge: TextView
@@ -408,7 +419,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             val s = dp(44)
             layoutParams = LinearLayout.LayoutParams(s, s)
-            background = circle(if (granted) Color.parseColor("#DCFCE7") else Color.parseColor("#ECEBFB"))
+            background = circle(if (granted) dk("#DCFCE7", "#173a25") else dk("#ECEBFB", "#2A2540"))
         })
         val texts = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -565,7 +576,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             val s = dp(56)
             layoutParams = LinearLayout.LayoutParams(s, s)
-            background = circle(Color.parseColor("#ECEBFB"))
+            background = circle(dk("#ECEBFB", "#2A2540"))
             setTextColor(cPrimary)
         }
         row.addView(statusBadge)
@@ -633,7 +644,7 @@ class MainActivity : Activity() {
                 android.text.InputFilter.AllCaps(),
             )
             setPadding(dp(16), dp(18), dp(16), dp(18))
-            background = rounded(Color.parseColor("#FAF8F4"), dp(12), cBorder, dp(1))
+            background = rounded(dk("#FAF8F4", "#2A2540"), dp(12), cBorder, dp(1))
         }
         pairingCard.addView(codeInput)
         pairingCard.addView(gap(dp(12)))
@@ -782,7 +793,7 @@ class MainActivity : Activity() {
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = rounded(Color.parseColor("#FEF2F2"), dp(12), cDanger, dp(1))
+            background = rounded(dk("#FEF2F2", "#3A1F22"), dp(12), cDanger, dp(1))
             isClickable = true
             setOnClickListener { unlinkIfRemoved() }
             layoutParams = LinearLayout.LayoutParams(
@@ -856,15 +867,15 @@ class MainActivity : Activity() {
 
         when {
             paired && owner -> setStatus(
-                "\u2713", cAccent, Color.parseColor("#DCFCE7"),
+                "\u2713", cAccent, dk("#DCFCE7", "#173a25"),
                 "Protected", "This device is linked and safeguarded."
             )
             paired -> setStatus(
-                "\u2713", cPrimary, Color.parseColor("#ECEBFB"),
+                "\u2713", cPrimary, dk("#ECEBFB", "#2A2540"),
                 "Linked", "Connected to your family. Protection pending setup."
             )
             else -> setStatus(
-                "!", Color.parseColor("#F59E0B"), Color.parseColor("#FEF3C7"),
+                "!", Color.parseColor("#F59E0B"), dk("#FEF3C7", "#3a2f14"),
                 "Not linked yet", "Enter a pairing code below to get started."
             )
         }

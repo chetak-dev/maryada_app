@@ -229,7 +229,7 @@ class _AppTile extends StatelessWidget {
                             size: 14, color: AppColors.success),
                         SizedBox(width: 4),
                         Text(
-                          'Allowed in Secure App Mode',
+                          'Allowed in Temp access mode',
                           style: TextStyle(
                             color: AppColors.success,
                             fontSize: 12,
@@ -251,7 +251,7 @@ class _AppTile extends StatelessWidget {
                 CheckedPopupMenuItem<String>(
                   value: 'banking',
                   checked: app.bankingAllowed,
-                  child: const Text('Allow in Secure App Mode'),
+                  child: const Text('Allow in Temp access mode'),
                 ),
               ],
             ),

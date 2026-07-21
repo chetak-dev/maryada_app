@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/auth_service.dart';
+import '../../theme/theme_controller.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/dialog_buttons.dart';
@@ -47,6 +48,12 @@ class SettingsScreen extends StatelessWidget {
         children: [
           _BrandCard(),
           const SizedBox(height: AppSpacing.lg),
+          Text('Appearance',
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(color: AppColors.textSecondary)),
+          const SizedBox(height: AppSpacing.sm),
+          const _ThemeCard(),
+          const SizedBox(height: AppSpacing.lg),
           Text('Device management',
               style: theme.textTheme.titleSmall
                   ?.copyWith(color: AppColors.textSecondary)),
@@ -87,6 +94,47 @@ class SettingsScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ThemeCard extends StatelessWidget {
+  const _ThemeCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: ValueListenableBuilder<ThemeMode>(
+          valueListenable: ThemeController.instance.mode,
+          builder: (context, mode, _) {
+            return SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<ThemeMode>(
+                segments: const [
+                  ButtonSegment(
+                      value: ThemeMode.system,
+                      label: Text('System'),
+                      icon: Icon(Icons.brightness_auto_rounded)),
+                  ButtonSegment(
+                      value: ThemeMode.light,
+                      label: Text('Light'),
+                      icon: Icon(Icons.light_mode_rounded)),
+                  ButtonSegment(
+                      value: ThemeMode.dark,
+                      label: Text('Dark'),
+                      icon: Icon(Icons.dark_mode_rounded)),
+                ],
+                selected: {mode},
+                showSelectedIcon: false,
+                onSelectionChanged: (s) =>
+                    ThemeController.instance.set(s.first),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
