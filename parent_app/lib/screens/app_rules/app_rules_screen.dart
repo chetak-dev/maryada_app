@@ -4,6 +4,13 @@ import '../../data/app_rules_repository.dart';
 import '../../data/db.dart';
 import '../../models/app_rule.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/access_scope.dart';
+import '../../widgets/empty_state.dart';
+import '../../widgets/feedback.dart';
+import '../../widgets/read_only_banner.dart';
+
+/// Which apps the list is showing.
+enum _AppFilter { all, blocked, banking }
 
 /// App rules editor: search installed apps, block them, or set a per-app daily
 /// limit. Persists to Firestore when [familyId] is set and connected.
@@ -22,6 +29,8 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
   late List<AppRule> _apps;
   bool _loading = false;
   String _query = '';
+  bool _canEdit = true;
+  _AppFilter _filter = _AppFilter.all;
 
   bool get _live => widget.familyId != null && Db.ready;
 
@@ -44,7 +53,8 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
           ? await AppRulesRepository.instance
               .loadInstalledAppsForChild(widget.familyId!, widget.childId!)
           : await AppRulesRepository.instance.loadInstalledApps(widget.familyId!);
-      final saved = await AppRulesRepository.instance.load(widget.familyId!);
+      final saved = await AppRulesRepository.instance
+          .load(widget.familyId!, childId: widget.childId);
       if (!mounted) return;
       setState(() {
         _apps = reported
@@ -61,96 +71,273 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
         }
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _loading = false);
+      // Otherwise this looks identical to "the child has no apps yet".
+      context.showError('Couldn’t load app rules', e);
     }
   }
 
-  void _persist(AppRule app) {
-    if (!_live) return;
-    AppRulesRepository.instance.setRule(
-      widget.familyId!,
-      packageName: app.packageName,
-      appName: app.appName,
-      blocked: app.blocked,
-      dailyLimitMinutes: app.dailyLimitMinutes,
-      bankingAllowed: app.bankingAllowed,
-    );
+  /// Writes one app's rule, undoing [revert] if the save is rejected — a switch
+  /// that stays on after a failed write would tell the parent an app is blocked
+  /// when the child device never got the rule.
+  Future<void> _persist(AppRule app, VoidCallback revert) async {
+    if (!_live || !_canEdit) return;
+    try {
+      await AppRulesRepository.instance.setRule(
+        widget.familyId!,
+        packageName: app.packageName,
+        appName: app.appName,
+        blocked: app.blocked,
+        dailyLimitMinutes: app.dailyLimitMinutes,
+        bankingAllowed: app.bankingAllowed,
+        childId: widget.childId,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(revert);
+      context.showError('Couldn’t save the rule for ${app.appName}', e);
+    }
   }
 
   List<AppRule> get _filtered {
-    if (_query.trim().isEmpty) return _apps;
-    final q = _query.toLowerCase();
-    return _apps.where((a) => a.appName.toLowerCase().contains(q)).toList();
+    final q = _query.trim().toLowerCase();
+    return _apps.where((a) {
+      if (q.isNotEmpty && !a.appName.toLowerCase().contains(q)) return false;
+      return switch (_filter) {
+        _AppFilter.all => true,
+        _AppFilter.blocked => a.blocked,
+        _AppFilter.banking => a.bankingAllowed,
+      };
+    }).toList();
   }
 
   @override
   Widget build(BuildContext context) {
-    final title =
-        widget.childName == null ? 'App rules' : 'App rules · ${widget.childName}';
-    final blockedCount = _apps.where((a) => a.blocked).length;
+    _canEdit = AccessScope.of(context);
+    final title = widget.childName == null
+        ? 'App rules'
+        : 'App rules · ${widget.childName}';
+    final blocked = _apps.where((a) => a.blocked).length;
+    final banking = _apps.where((a) => a.bankingAllowed).length;
+    final list = _filtered;
     return Scaffold(
       appBar: AppBar(title: Text(title)),
       body: Column(
         children: [
+          if (!_canEdit)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(
+                  AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+              child: ReadOnlyBanner(),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md,
+                AppSpacing.md, AppSpacing.sm),
+            child: _RulesSummary(
+              total: _apps.length,
+              blocked: blocked,
+              banking: banking,
+              filter: _filter,
+              // Tapping the active stat clears it, so "all" needs no chip.
+              onFilter: (f) => setState(
+                  () => _filter = _filter == f ? _AppFilter.all : f),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.sm),
+                AppSpacing.md, 0, AppSpacing.md, AppSpacing.sm),
             child: TextField(
               onChanged: (v) => setState(() => _query = v),
               decoration: const InputDecoration(
+                isDense: true,
                 hintText: 'Search apps',
                 prefixIcon: Icon(Icons.search_rounded),
               ),
             ),
           ),
-          if (blockedCount > 0)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '$blockedCount app(s) blocked',
-                  style: const TextStyle(
-                      color: AppColors.danger, fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _apps.isEmpty
-                    ? Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(AppSpacing.xl),
-                          child: Text(
-                            'No apps yet — they appear once the child device syncs.',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: AppColors.textMuted),
-                          ),
-                        ),
+                    ? const EmptyState(
+                        icon: Icons.apps_rounded,
+                        title: 'No apps yet',
+                        message:
+                            'Apps appear here once the child device syncs.',
                       )
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(AppSpacing.md,
-                            AppSpacing.sm, AppSpacing.md, AppSpacing.xxl),
-                        itemCount: _filtered.length,
-                        separatorBuilder: (_, _) =>
-                            const SizedBox(height: AppSpacing.sm),
-                        itemBuilder: (_, i) => _AppTile(
-                          app: _filtered[i],
-                          onBlockChanged: (v) {
-                            setState(() => _filtered[i].blocked = v);
-                            _persist(_filtered[i]);
-                          },
-                          onBankingChanged: (v) {
-                            setState(() => _filtered[i].bankingAllowed = v);
-                            _persist(_filtered[i]);
-                          },
-                        ),
-                      ),
+                    : list.isEmpty
+                        ? const EmptyState(
+                            icon: Icons.search_off_rounded,
+                            title: 'No apps in this view',
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(AppSpacing.md,
+                                0, AppSpacing.md, AppSpacing.xxl),
+                            itemCount: list.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: AppSpacing.sm),
+                            itemBuilder: (_, i) => _AppTile(
+                              app: list[i],
+                              canEdit: _canEdit,
+                              onBlockChanged: (v) {
+                                if (!_canEdit) return;
+                                final app = list[i];
+                                final was = app.blocked;
+                                setState(() => app.blocked = v);
+                                _persist(app, () => app.blocked = was);
+                              },
+                              onBankingChanged: (v) {
+                                if (!_canEdit) return;
+                                final app = list[i];
+                                final was = app.bankingAllowed;
+                                setState(() => app.bankingAllowed = v);
+                                _persist(app, () => app.bankingAllowed = was);
+                              },
+                            ),
+                          ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The headline for the list: how many apps are installed, and how many carry
+/// a rule. The two counts double as filters.
+class _RulesSummary extends StatelessWidget {
+  const _RulesSummary({
+    required this.total,
+    required this.blocked,
+    required this.banking,
+    required this.filter,
+    required this.onFilter,
+  });
+
+  final int total;
+  final int blocked;
+  final int banking;
+  final _AppFilter filter;
+  final ValueChanged<_AppFilter> onFilter;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        gradient: AppColors.brandGradient,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadow.raised,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'APPS ACROSS YOUR DEVICES',
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.75),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '$total',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 32,
+              fontWeight: FontWeight.w700,
+              height: 1.15,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.sm),
+          Container(height: 1, color: Colors.white.withValues(alpha: 0.18)),
+          const SizedBox(height: AppSpacing.xs),
+          Row(
+            children: [
+              _Stat(
+                value: blocked,
+                label: 'Blocked',
+                icon: Icons.block_rounded,
+                active: filter == _AppFilter.blocked,
+                onTap: () => onFilter(_AppFilter.blocked),
+              ),
+              _Stat(
+                value: banking,
+                label: 'Temp access',
+                icon: Icons.account_balance_rounded,
+                active: filter == _AppFilter.banking,
+                onTap: () => onFilter(_AppFilter.banking),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({
+    required this.value,
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.onTap,
+  });
+
+  final int value;
+  final String label;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => onTap(),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 90),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+          decoration: BoxDecoration(
+            color: active
+                ? Colors.white.withValues(alpha: 0.20)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 15, color: Colors.white.withValues(alpha: 0.75)),
+              const SizedBox(width: 5),
+              Text(
+                '$value',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.75),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -159,105 +346,152 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
 class _AppTile extends StatelessWidget {
   const _AppTile({
     required this.app,
+    required this.canEdit,
     required this.onBlockChanged,
     required this.onBankingChanged,
   });
 
   final AppRule app;
+  final bool canEdit;
   final ValueChanged<bool> onBlockChanged;
   final ValueChanged<bool> onBankingChanged;
 
-  String? get _subtitle {
-    final names = app.owners.isNotEmpty ? app.owners.join(', ') : null;
-    if (app.blocked) {
-      return names == null ? 'Blocked' : 'Blocked · $names';
-    }
-    return names;
+  @override
+  Widget build(BuildContext context) {
+    final owners = app.owners.isNotEmpty ? app.owners.join(', ') : null;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(
+          color: app.blocked
+              ? AppColors.danger.withValues(alpha: 0.35)
+              : AppColors.borderOf(context),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: app.color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: Text(
+              app.initials,
+              style: TextStyle(
+                color: app.color,
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
+              ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  app.appName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    color: AppColors.textPrimaryOf(context),
+                  ),
+                ),
+                if (owners != null || app.blocked || app.bankingAllowed) ...[
+                  const SizedBox(height: 5),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (app.blocked)
+                        const _Tag(label: 'Blocked', color: AppColors.danger),
+                      if (app.bankingAllowed)
+                        const _Tag(
+                            label: 'Temp access',
+                            color: AppColors.success,
+                            icon: Icons.account_balance_rounded),
+                      if (owners != null)
+                        Text(
+                          owners,
+                          style: const TextStyle(
+                              color: AppColors.textMuted, fontSize: 12),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Switch(
+            value: app.blocked,
+            onChanged: canEdit ? onBlockChanged : null,
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            enabled: canEdit,
+            position: PopupMenuPosition.under,
+            icon: const Icon(Icons.more_vert_rounded,
+                size: 20, color: AppColors.textMuted),
+            onSelected: (v) {
+              if (v == 'banking') onBankingChanged(!app.bankingAllowed);
+            },
+            itemBuilder: (context) => [
+              CheckedPopupMenuItem<String>(
+                value: 'banking',
+                checked: app.bankingAllowed,
+                child: const Text('Allow in Temp access mode'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
+}
+
+/// A small state chip on an app row — what rule it carries, at a glance.
+class _Tag extends StatelessWidget {
+  const _Tag({required this.label, required this.color, this.icon});
+
+  final String label;
+  final Color color;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
-    final subtitle = _subtitle;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md, vertical: AppSpacing.sm),
-        child: Row(
-          children: [
-            Container(
-              width: 44,
-              height: 44,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: app.color.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
-              child: Text(
-                app.initials,
-                style: TextStyle(
-                  color: app.color,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 18,
-                ),
-              ),
-            ),
-            const SizedBox(width: AppSpacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(app.appName,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        color:
-                            app.blocked ? AppColors.danger : AppColors.textMuted,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                  if (app.bankingAllowed) ...[
-                    const SizedBox(height: 6),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: const [
-                        Icon(Icons.account_balance_rounded,
-                            size: 14, color: AppColors.success),
-                        SizedBox(width: 4),
-                        Text(
-                          'Allowed in Temp access mode',
-                          style: TextStyle(
-                            color: AppColors.success,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            PopupMenuButton<String>(
-              tooltip: 'More',
-              onSelected: (v) {
-                if (v == 'banking') onBankingChanged(!app.bankingAllowed);
-              },
-              itemBuilder: (context) => [
-                CheckedPopupMenuItem<String>(
-                  value: 'banking',
-                  checked: app.bankingAllowed,
-                  child: const Text('Allow in Temp access mode'),
-                ),
-              ],
-            ),
-            Switch(value: app.blocked, onChanged: onBlockChanged),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 11, color: color),
+            const SizedBox(width: 3),
           ],
-        ),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
       ),
     );
   }

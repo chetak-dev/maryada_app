@@ -68,31 +68,21 @@ class CallHistoryRepository {
   CallHistoryRepository._();
   static final instance = CallHistoryRepository._();
 
-  Stream<List<CallRecord>> watch(String familyId, String childId) {
-    return Db.families
-        .doc(familyId)
-        .collection('children')
-        .doc(childId)
-        .collection('callHistory')
-        .doc('current')
-        .snapshots()
-        .map((doc) {
-      final data = doc.data();
-      if (data == null) return const <CallRecord>[];
-      return ((data['calls'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((m) => CallRecord(
-                number: (m['number'] ?? 'Unknown').toString(),
-                name: (m['name'] ?? '').toString(),
-                kind: CallKindInfo.fromAndroidType(
-                    (m['type'] as num?)?.toInt() ?? 0),
-                at: (m['at'] is num)
-                    ? DateTime.fromMillisecondsSinceEpoch((m['at'] as num).toInt())
-                    : null,
-                duration:
-                    Duration(seconds: (m['duration'] as num?)?.toInt() ?? 0),
-              ))
-          .toList();
-    });
+  Stream<List<CallRecord>> watch(String familyId, String childId,
+      {String? deviceId}) {
+    return Db.watchReportArray<CallRecord>(
+      deviceId: deviceId,
+      familyId: familyId,
+      childId: childId,
+      collection: 'callHistory',
+      field: 'calls',
+      parse: (m) => CallRecord(
+        number: (m['number'] ?? 'Unknown').toString(),
+        name: (m['name'] ?? '').toString(),
+        kind: CallKindInfo.fromAndroidType((m['type'] as num?)?.toInt() ?? 0),
+        at: Db.millis(m['at']),
+        duration: Duration(seconds: (m['duration'] as num?)?.toInt() ?? 0),
+      ),
+    );
   }
 }

@@ -35,12 +35,20 @@ class AppRulesRepository {
   AppRulesRepository._();
   static final instance = AppRulesRepository._();
 
-  CollectionReference<Map<String, dynamic>> _col(String familyId) =>
-      Db.families.doc(familyId).collection('appRules');
+  CollectionReference<Map<String, dynamic>> _col(String familyId,
+          [String? childId]) =>
+      (childId == null || childId.isEmpty)
+          ? Db.families.doc(familyId).collection('appRules')
+          : Db.families
+              .doc(familyId)
+              .collection('children')
+              .doc(childId)
+              .collection('appRules');
 
-  /// One-shot load of saved rules, keyed by package name.
-  Future<Map<String, AppRuleData>> load(String familyId) async {
-    final snap = await _col(familyId).get();
+  /// One-shot load of saved rules, keyed by package name. When [childId] is set,
+  /// loads that child's own rules; otherwise the family-wide ("common") rules.
+  Future<Map<String, AppRuleData>> load(String familyId, {String? childId}) async {
+    final snap = await _col(familyId, childId).get();
     return {
       for (final d in snap.docs)
         d.id: AppRuleData(
@@ -52,6 +60,8 @@ class AppRulesRepository {
     };
   }
 
+  /// Saves a rule. When [childId] is set, it applies only to that child;
+  /// otherwise it's a family-wide ("common") rule that applies to all children.
   Future<void> setRule(
     String familyId, {
     required String packageName,
@@ -59,8 +69,9 @@ class AppRulesRepository {
     required bool blocked,
     required int dailyLimitMinutes,
     required bool bankingAllowed,
+    String? childId,
   }) {
-    return _col(familyId).doc(packageName).set({
+    return _col(familyId, childId).doc(packageName).set({
       'appName': appName,
       'blocked': blocked,
       'dailyLimitMinutes': dailyLimitMinutes,

@@ -22,6 +22,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
@@ -44,12 +45,24 @@ import java.util.Locale
 class EnforcementService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
-    private var listener: ListenerRegistration? = null
-    private var appRulesListener: ListenerRegistration? = null
-    private var webFilterListener: ListenerRegistration? = null
-    private var contentFilterListener: ListenerRegistration? = null
-    private var childDocListener: ListenerRegistration? = null
+
+    /**
+     * Every Firestore snapshot listener we hold. Registering here (instead of a
+     * field per listener) means [detachListeners] can never miss one — a missed
+     * listener used to keep firing against a cleared [ChildStore] after the
+     * parent unpaired the device.
+     */
+    private val listeners = mutableListOf<ListenerRegistration>()
     private var currentBlocked: Set<String> = emptySet()
+
+    // App rules come from two places, kept separate so they can be merged:
+    //  - family-wide "common" rules: families/{fid}/appRules
+    //  - this child's own rules:     families/{fid}/children/{cid}/appRules
+    // An app is blocked if EITHER blocks it; banking-allow is the union too.
+    private var familyBlocked: Set<String> = emptySet()
+    private var childBlocked: Set<String> = emptySet()
+    private var familyBankingAllowed: Set<String> = emptySet()
+    private var childBankingAllowed: Set<String> = emptySet()
 
     @Volatile
     private var rule = ScreenTimeRule()
@@ -59,6 +72,7 @@ class EnforcementService : Service() {
             // Heartbeat first, and wrap everything so one failing task can never
             // kill the loop (which would make the parent show the child offline).
             try {
+                Pairing.ensureDeviceRegistered(this@EnforcementService)
                 heartbeat()
                 enforce()
                 reportLocation()
@@ -68,10 +82,14 @@ class EnforcementService : Service() {
                 reportSmsHistory()
                 reportMessages()
                 reportYoutubeHistory()
+                restoreTempAccessIfRecovered(this@EnforcementService)
+                TempAccessNotice.sync(this@EnforcementService)
                 enforceLockbox()
                 checkForUpdate()
-            } catch (_: Throwable) {
-                // Ignore — always reschedule below.
+            } catch (t: Throwable) {
+                // Never let one failing task kill the loop, but do record it — a
+                // silent failure here used to be invisible on a remote device.
+                Diag.warn(this@EnforcementService, "tick", t)
             } finally {
                 handler.postDelayed(this, EVAL_INTERVAL_MS)
             }
@@ -83,14 +101,23 @@ class EnforcementService : Service() {
         startAsForeground()
         YoutubeStore.init(this)
         WebHistoryStore.init(this)
+        MessageStore.init(this)
+        // Devices paired by an older build have no `devices/{uid}` record, which
+        // the security rules now require before this device may read the
+        // family's rules. Register before attaching the listeners.
+        Pairing.ensureDeviceRegistered(this)
         attachRuleListener()
         attachAppRulesListener()
+        attachChildAppRulesListener()
         attachWebFilterListener()
         attachContentFilterListener()
+        attachWebPolicyListener()
         attachChildDocListener()
+        attachDeviceDocListener()
         registerPackageChanges()
         DeviceLockdown.applyTamperProtection(this)
         reportInstalledApps()
+        migrateLegacyReports()
         handler.post(tick)
         handler.post(lockGuard)
     }
@@ -104,14 +131,29 @@ class EnforcementService : Service() {
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         handler.removeCallbacks(lockGuard)
-        listener?.remove()
-        appRulesListener?.remove()
-        webFilterListener?.remove()
-        contentFilterListener?.remove()
-        childDocListener?.remove()
+        detachListeners()
         unregisterPackageChanges()
-        LockOverlay.hide(this)
+        LockOverlay.hide(this, force = true)
         super.onDestroy()
+    }
+
+    /** Removes every registered snapshot listener. Safe to call more than once. */
+    @Synchronized
+    private fun detachListeners() {
+        for (registration in listeners) {
+            try {
+                registration.remove()
+            } catch (e: Exception) {
+                Diag.warn(this, "detachListener", e)
+            }
+        }
+        listeners.clear()
+    }
+
+    /** Tracks a listener so [detachListeners] will tear it down. */
+    @Synchronized
+    private fun track(registration: ListenerRegistration) {
+        listeners.add(registration)
     }
 
     /**
@@ -136,7 +178,8 @@ class EnforcementService : Service() {
         try {
             registerReceiver(receiver, filter)
             packageReceiver = receiver
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Diag.warn(this, "registerPackageChanges", e)
         }
     }
 
@@ -144,7 +187,8 @@ class EnforcementService : Service() {
         packageReceiver?.let {
             try {
                 unregisterReceiver(it)
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Diag.warn(this, "unregisterPackageChanges", e)
             }
         }
         packageReceiver = null
@@ -158,28 +202,71 @@ class EnforcementService : Service() {
     private fun attachChildDocListener() {
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
-        childDocListener = FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .addSnapshotListener { snap, _ ->
-                if (snap != null && !snap.exists() && !snap.metadata.isFromCache) {
-                    unpair()
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("families").document(familyId)
+                .collection("children").document(childId)
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Diag.warn(this, "childDocListener", e)
+                        return@addSnapshotListener
+                    }
+                    if (snap != null && !snap.exists() && !snap.metadata.isFromCache) {
+                        unpair()
+                        return@addSnapshotListener
+                    }
+                    // A site-admin wipe stamps the child doc. Honour it locally:
+                    // drop buffered history and the chat dedup set, so on-screen
+                    // chats are re-captured and deleted history isn't resurrected
+                    // from this device's local copies on the next flush.
+                    val clearedAt =
+                        snap?.getTimestamp("historyClearedAt")?.toDate()?.time ?: 0L
+                    if (clearedAt > 0L &&
+                        clearedAt != ChildStore.historyClearedAt(this)
+                    ) {
+                        ChildStore.setHistoryClearedAt(this, clearedAt)
+                        MessageStore.resetForClear()
+                        WebHistoryStore.clearAll()
+                        YoutubeStore.clearAll()
+                        android.util.Log.i(
+                            "Maryada", "history wipe honoured ($clearedAt)")
+                    }
                 }
-            }
+        )
+    }
+
+    /** Watches this installation's device record for a parent revocation. */
+    private fun attachDeviceDocListener() {
+        val familyId = ChildStore.familyId(this) ?: return
+        val childId = ChildStore.childId(this) ?: return
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("families").document(familyId)
+                .collection("children").document(childId)
+                .collection("devices").document(uid)
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Diag.warn(this, "deviceDocListener", e)
+                        return@addSnapshotListener
+                    }
+                    if (snap?.exists() == true && snap.getBoolean("revoked") == true) {
+                        unpair()
+                    }
+                }
+        )
     }
 
     /** Clears local pairing, stops the filter, and shuts the service down. */
     private fun unpair() {
         handler.removeCallbacks(tick)
         handler.removeCallbacks(lockGuard)
-        listener?.remove()
-        appRulesListener?.remove()
-        webFilterListener?.remove()
-        childDocListener?.remove()
+        detachListeners()
         unregisterPackageChanges()
-        LockOverlay.hide(this)
+        LockOverlay.hide(this, force = true)
         // The parent removed this device -> allow it to be uninstalled again.
         DeviceLockdown.releaseForRemoval(this)
+        Pairing.unregisterDevice(this)
         WebFilterVpnService.stop(this)
         ChildStore.clear(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -188,23 +275,29 @@ class EnforcementService : Service() {
 
     private fun attachRuleListener() {
         val familyId = ChildStore.familyId(this) ?: return
-        listener = FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("rules").document("screenTime")
-            .addSnapshotListener { snap, _ ->
-                if (snap != null && snap.exists()) {
-                    fun i(k: String, d: Int) = (snap.get(k) as? Number)?.toInt() ?: d
-                    rule = ScreenTimeRule(
-                        dailyLimitMinutes = i("dailyLimitMinutes", 120),
-                        bedtimeEnabled = snap.getBoolean("bedtimeEnabled") ?: false,
-                        bedtimeStart = i("bedtimeStart", 21 * 60),
-                        bedtimeEnd = i("bedtimeEnd", 7 * 60),
-                        paused = snap.getBoolean("paused") ?: false,
-                    )
-                    // React immediately when the parent pauses/unpauses.
-                    enforce()
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("families").document(familyId)
+                .collection("rules").document("screenTime")
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Diag.warn(this, "ruleListener", e)
+                        return@addSnapshotListener
+                    }
+                    if (snap != null && snap.exists()) {
+                        fun i(k: String, d: Int) = (snap.get(k) as? Number)?.toInt() ?: d
+                        rule = ScreenTimeRule(
+                            dailyLimitMinutes = i("dailyLimitMinutes", 120),
+                            bedtimeEnabled = snap.getBoolean("bedtimeEnabled") ?: false,
+                            bedtimeStart = i("bedtimeStart", 21 * 60),
+                            bedtimeEnd = i("bedtimeEnd", 7 * 60),
+                            paused = snap.getBoolean("paused") ?: false,
+                        )
+                        // React immediately when the parent pauses/unpauses.
+                        enforce()
+                    }
                 }
-            }
+        )
     }
 
     private fun enforce() {
@@ -216,8 +309,16 @@ class EnforcementService : Service() {
         // freeze the whole device behind a full-screen overlay.
         ScreenGuard.locked = lock
         ScreenGuard.label = if (rule.paused) "paused" else "resting (bedtime)"
+        ScreenGuard.lockTitle = if (rule.paused) "Paused" else "Bedtime"
+        ScreenGuard.lockSubtitle = if (rule.paused) {
+            "Your device is paused by your parent."
+        } else {
+            "It's rest time \uD83C\uDF19\n" +
+                "Bedtime: ${fmtTime(rule.bedtimeStart)} \u2013 ${fmtTime(rule.bedtimeEnd)}\n" +
+                "Ask your parent if you need the phone."
+        }
         if (!lock && !ChildStore.lockboxActive(this)) {
-            LockOverlay.hide(this)
+            LockOverlay.hide(this, force = true)
         }
     }
 
@@ -229,29 +330,79 @@ class EnforcementService : Service() {
         lastHeartbeat = now
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
+        val payload = mutableMapOf<String, Any?>(
+            "online" to true,
+            "lastSeenAt" to FieldValue.serverTimestamp(),
+            // Live protection status, so the parent always knows whether
+            // monitoring is intact — even between the once-in-a-few-days
+            // check-ins. permissionsOk was previously only set at pairing.
+            "protections" to protectionsMap(),
+            "permissionsOk" to Permissions.allGranted(this),
+            // Installed app version, so the parent can spot devices that
+            // haven't taken the latest OTA update.
+            "appVersionCode" to appVersionCode(),
+            "appVersionName" to appVersionName(),
+        )
+        // Surface the most recent internal failure so a device that has quietly
+        // stopped working is visible in the admin app instead of just looking OK.
+        val lastError = Diag.lastError(this)
+        val reportedAt = Diag.lastErrorAt(this)
+        if (lastError != null) {
+            payload["lastError"] = lastError
+            payload["lastErrorAt"] = Date(reportedAt)
+        } else {
+            // A merge write does not remove old fields unless we explicitly
+            // clear them, which left resolved errors visible forever.
+            payload["lastError"] = null
+            payload["lastErrorAt"] = null
+        }
         FirebaseFirestore.getInstance()
             .collection("families").document(familyId)
             .collection("children").document(childId)
-            .set(
-                mapOf(
-                    "online" to true,
-                    "lastSeenAt" to FieldValue.serverTimestamp(),
-                    // Live protection status, so the parent always knows whether
-                    // monitoring is intact — even between the once-in-a-few-days
-                    // check-ins. permissionsOk was previously only set at pairing.
-                    "protections" to protectionsMap(),
-                    "permissionsOk" to Permissions.allGranted(this),
-                ),
-                SetOptions.merge()
-            )
+            .set(payload, SetOptions.merge())
+            .addOnSuccessListener {
+                // This write reaching Firestore is proof the device is fine, so
+                // the failure it just reported is history: drop it and the next
+                // heartbeat clears it on the parent's side too.
+                Diag.clearResolved(this, reportedAt)
+            }
             .addOnFailureListener { e ->
                 // The parent removed this device -> our write is rejected. Unpair.
                 if (e is FirebaseFirestoreException &&
                     e.code == FirebaseFirestoreException.Code.PERMISSION_DENIED
                 ) {
                     unpair()
+                } else {
+                    Diag.warn(this, "heartbeat", e)
                 }
             }
+        reportDeviceRecord(familyId, childId, payload)
+    }
+
+    /**
+     * Mirrors this device's state into `children/{id}/devices/{uid}`, so a child
+     * can be a profile with more than one device rather than being one device.
+     * Written alongside the fields on the child doc, which stay authoritative
+     * until every device reports here.
+     */
+    private fun reportDeviceRecord(
+        familyId: String,
+        childId: String,
+        payload: Map<String, Any?>,
+    ) {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val record = payload.toMutableMap()
+        record["platform"] = "android"
+        record["deviceUid"] = uid
+        record["deviceModel"] = "${Build.MANUFACTURER} ${Build.MODEL}"
+        val displayName = ChildStore.deviceName(this)
+        if (displayName.isNotEmpty()) record["displayName"] = displayName
+        FirebaseFirestore.getInstance()
+            .collection("families").document(familyId)
+            .collection("children").document(childId)
+            .collection("devices").document(uid)
+            .set(record, SetOptions.merge())
+            .addOnFailureListener { Diag.warn(this, "deviceRecord", it) }
     }
 
     /** Live grant state of each required protection (true == granted). */
@@ -264,6 +415,22 @@ class EnforcementService : Service() {
         "deviceAdmin" to Permissions.hasDeviceAdmin(this),
         "overlay" to Permissions.hasOverlay(this),
     )
+
+    /** The installed app's versionCode (reported to the parent via heartbeat). */
+    private fun appVersionCode(): Long = try {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.longVersionCode
+        else @Suppress("DEPRECATION") info.versionCode.toLong()
+    } catch (_: Exception) {
+        0L
+    }
+
+    /** The installed app's versionName, e.g. "1.0.4". */
+    private fun appVersionName(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+    } catch (_: Exception) {
+        ""
+    }
 
     private fun offProtections(): List<String> =
         protectionsMap().filterValues { !it }.keys.toList()
@@ -404,17 +571,37 @@ class EnforcementService : Service() {
     private fun reverseGeocode(lat: Double, lng: Double): String? {
         return try {
             @Suppress("DEPRECATION")
-            val results = Geocoder(this, Locale.getDefault()).getFromLocation(lat, lng, 1)
-            val addr = results?.firstOrNull() ?: return null
-            val parts = listOfNotNull(
-                addr.thoroughfare ?: addr.featureName,
-                addr.subLocality ?: addr.locality,
-            ).distinct()
-            if (parts.isNotEmpty()) parts.joinToString(", ") else addr.getAddressLine(0)
+            val results = Geocoder(this, Locale.getDefault()).getFromLocation(lat, lng, 3)
+                ?: return null
+            // Prefer the result that yields real place words — the first one is
+            // often just a Plus Code ("34WG+P26") with no street or area.
+            for (addr in results) {
+                val feature = addr.featureName
+                    ?.takeUnless { isPlusCode(it) || it == addr.thoroughfare }
+                val parts = listOfNotNull(
+                    feature,
+                    addr.thoroughfare,
+                    addr.subLocality,
+                    addr.locality ?: addr.subAdminArea,
+                ).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+                if (parts.isNotEmpty()) return parts.take(3).joinToString(", ")
+            }
+            val line = results.firstOrNull()?.getAddressLine(0) ?: return null
+            // Last resort: strip the leading Plus Code token from the full line
+            // ("34WG+P26 Hyderabad, Telangana" -> "Hyderabad, Telangana").
+            line.split(' ')
+                .dropWhile { isPlusCode(it.trim(',')) }
+                .joinToString(" ")
+                .ifBlank { line }
         } catch (_: Exception) {
             null
         }
     }
+
+    /** True for Open Location Codes like "34WG+P26" — not a place name. */
+    private fun isPlusCode(s: String): Boolean =
+        Regex("^[23456789CFGHJMPQRVWX]{4,8}\\+[23456789CFGHJMPQRVWX]{2,4}$", RegexOption.IGNORE_CASE)
+            .matches(s.trim())
 
     private var lastUsageReport = 0L
 
@@ -459,23 +646,58 @@ class EnforcementService : Service() {
      * address bar + blocked attempts from the DNS filter). Throttled, and only
      * when there's new data.
      */
+    /**
+     * This device's document for an activity feed. Every device used to share
+     * one `current` doc per feed, so a second device silently overwrote the
+     * first's history — and the parent could never tell them apart.
+     */
+    private fun reportDoc(
+        familyId: String,
+        childId: String,
+        collection: String,
+    ) = FirebaseFirestore.getInstance()
+        .collection("families").document(familyId)
+        .collection("children").document(childId)
+        .collection(collection)
+        .document(FirebaseAuth.getInstance().currentUser?.uid ?: "current")
+
+    /** Moves any legacy shared `current` feed onto this device, once. */
+    private fun migrateLegacyReports() {
+        if (ChildStore.reportsMigrated(this)) return
+        val familyId = ChildStore.familyId(this) ?: return
+        val childId = ChildStore.childId(this) ?: return
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        ChildStore.setReportsMigrated(this, true)
+        val db = FirebaseFirestore.getInstance()
+        for (feed in REPORT_FEEDS) {
+            val col = db.collection("families").document(familyId)
+                .collection("children").document(childId)
+                .collection(feed)
+            col.document("current").get()
+                .addOnSuccessListener { snap ->
+                    val data = snap.data ?: return@addOnSuccessListener
+                    col.document(uid).set(data, SetOptions.merge())
+                        .addOnSuccessListener { col.document("current").delete() }
+                }
+                .addOnFailureListener { Diag.warn(this, "migrateReports:$feed", it) }
+        }
+    }
+
     private fun reportWebHistory() {
         val now = System.currentTimeMillis()
         if (now - lastWebHistoryReport < WEBHISTORY_MS) return
         if (!WebHistoryStore.hasChanges()) return
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
-        val (visited, blocked) = WebHistoryStore.snapshot()
-        if (visited.isEmpty() && blocked.isEmpty()) return
+        val (visited, blocked, searches) = WebHistoryStore.snapshot()
+        if (visited.isEmpty() && blocked.isEmpty() && searches.isEmpty()) return
         lastWebHistoryReport = now
-        FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .collection("webHistory").document("current")
+        reportDoc(familyId, childId, "webHistory")
             .set(
                 mapOf(
                     "visited" to visited,
                     "blocked" to blocked,
+                    "searches" to searches,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 ),
                 SetOptions.merge()
@@ -560,7 +782,7 @@ class EnforcementService : Service() {
         }
         ChildStore.exitLockbox(this)
         lastForeground = null
-        LockOverlay.hide(this)
+        LockOverlay.hide(this, force = true)
         reportLockbox(active = false, since = 0L)
         writeProtectionAlert(type = "protection_restored")
     }
@@ -570,18 +792,29 @@ class EnforcementService : Service() {
         // Note: the package installer is deliberately NOT essential, so opening
         // an app's uninstall screen while a protection is off gets covered by
         // the lock overlay (the child must ask the parent to remove apps).
-        return pkg.contains("settings") ||
-            pkg.contains("permissioncontroller") ||
-            pkg.contains("launcher") ||
-            pkg.contains("systemui") ||
-            pkg.contains("dialer") ||
-            pkg.contains(".phone") ||
-            pkg.endsWith(".home")
+        return Pkgs.isEssentialSystem(pkg)
+    }
+
+    /** Home screen — the pause/bedtime lock screen leaves this (and the Maryada
+     *  app) accessible and only covers real apps the child opens. Transient
+     *  system windows aren't included so the overlay doesn't flicker. */
+    private fun isHomeOrSystem(pkg: String): Boolean =
+        pkg == packageName || Pkgs.isLauncher(pkg)
+
+    /** Formats "minutes from midnight" as a 12-hour clock, e.g. 1290 -> "9:30 PM". */
+    private fun fmtTime(minutes: Int): String {
+        val h24 = ((minutes / 60) % 24 + 24) % 24
+        val m = ((minutes % 60) + 60) % 60
+        var h = h24 % 12
+        if (h == 0) h = 12
+        val ampm = if (h24 < 12) "AM" else "PM"
+        return String.format(java.util.Locale.US, "%d:%02d %s", h, m, ampm)
     }
 
     // ---- Fallback enforcement (no Device Owner) ---------------------------
 
     private var lastForeground: String? = null
+    private var lastForegroundQuery = 0L
 
     /**
      * Fast loop that enforces the lockbox on devices that are NOT Device Owner
@@ -593,33 +826,70 @@ class EnforcementService : Service() {
      */
     private val lockGuard = object : Runnable {
         override fun run() {
+            var enforcing = false
             try {
-                guardForeground()
-            } catch (_: Throwable) {
-                // Ignore — always reschedule below.
+                enforcing = guardForeground()
+            } catch (t: Throwable) {
+                Diag.warn(this@EnforcementService, "lockGuard", t)
             } finally {
-                handler.postDelayed(this, LOCKGUARD_INTERVAL_MS)
+                // Polling every 700ms all day was a large part of why the phone
+                // felt slow. The fast rate only matters while something is
+                // actually being blocked; otherwise idle along.
+                handler.postDelayed(
+                    this,
+                    if (enforcing) LOCKGUARD_INTERVAL_MS else LOCKGUARD_IDLE_MS,
+                )
             }
         }
     }
 
-    private fun guardForeground() {
-        if (!ChildStore.isPaired(this)) return
-        // Bedtime/pause lock takes precedence and already covers everything.
+    /** Returns true while it is actively enforcing (so the loop stays fast). */
+    private fun guardForeground(): Boolean {
+        if (!ChildStore.isPaired(this)) return false
+        // Pause / bedtime: show the full lock screen with the real schedule. Let
+        // emergency calls through by hiding it while a phone/dialer app is up.
         if (ScreenGuard.shouldLock(
                 rule.paused, rule.bedtimeEnabled, rule.bedtimeStart, rule.bedtimeEnd
             )
-        ) return
+        ) {
+            // The device stays usable on the home screen; the lock screen only
+            // appears when the child actually opens a (non-home) app.
+            // Prefer the accessibility service's evented foreground over the
+            // UsageStats poll — the two briefly disagree around app switches,
+            // and acting on the laggy one made the overlay flicker.
+            val axFg = ForegroundApp.packageName
+            val axFresh =
+                System.currentTimeMillis() - ForegroundApp.changedAt < 10_000L
+            val fg = if (axFg.isNotEmpty() && axFresh) axFg else foregroundPackage()
+            if (fg == null || isHomeOrSystem(fg)) {
+                LockOverlay.hide(this)
+            } else {
+                LockOverlay.show(this, ScreenGuard.lockTitle, ScreenGuard.lockSubtitle)
+            }
+            return true
+        }
 
         // Live check so enforcement reacts within a second, without waiting for
         // the 30s state machine (which still does the parent reporting/alerts).
-        if (Permissions.allGranted(this)) {
+        if (Permissions.allGrantedCached(this)) {
+            // A blocked app keeps its block screen for as long as it is open;
+            // the accessibility service raises it, this keeps it there.
+            val open = foregroundPackage()
+            if (open != null && open != packageName && BlockedApps.isBlocked(open)) {
+                LockOverlay.show(
+                    this,
+                    LockOverlay.APP_BLOCKED_TITLE,
+                    LockOverlay.APP_BLOCKED_MESSAGE,
+                    AlertLog.appLabel(this, open),
+                )
+                return true
+            }
             // Protections are intact — drop our fallback overlay if we raised it.
-            if (LockOverlay.isShowing()) LockOverlay.hide(this)
-            return
+            if (LockOverlay.isShowing()) LockOverlay.hide(this, force = true)
+            return false
         }
 
-        val fg = foregroundPackage() ?: return
+        val fg = foregroundPackage() ?: return true
         val allowed = fg == packageName ||
             isEssential(fg) ||
             SensitiveApps.isSensitive(fg)
@@ -632,6 +902,7 @@ class EnforcementService : Service() {
                 "Turn your Maryada protections back on to use this app.",
             )
         }
+        return true
     }
 
     /**
@@ -641,10 +912,22 @@ class EnforcementService : Service() {
      * isn't granted.
      */
     private fun foregroundPackage(): String? {
+        // The accessibility service already tracks this from window events, so
+        // prefer its answer and skip the UsageStats query entirely — that query
+        // parses the usage DB on every call and was running twice a second.
+        val fromEvents = ForegroundApp.packageName
+        if (fromEvents.isNotEmpty() &&
+            System.currentTimeMillis() - ForegroundApp.changedAt < FOREGROUND_FRESH_MS
+        ) {
+            lastForeground = fromEvents
+            return fromEvents
+        }
         if (!Permissions.hasUsageAccess(this)) return null
         val usm = getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
             ?: return lastForeground
         val now = System.currentTimeMillis()
+        if (now - lastForegroundQuery < FOREGROUND_QUERY_MS) return lastForeground
+        lastForegroundQuery = now
         val events = usm.queryEvents(now - 3_000, now)
         val e = UsageEvents.Event()
         while (events.hasNextEvent()) {
@@ -707,7 +990,8 @@ class EnforcementService : Service() {
                         Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                 )
             )
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Diag.warn(this, "bringSelfToFront", e)
         }
     }
 
@@ -733,10 +1017,7 @@ class EnforcementService : Service() {
                 "duration" to it.durationSeconds,
             )
         }
-        FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .collection("callHistory").document("current")
+        reportDoc(familyId, childId, "callHistory")
             .set(
                 mapOf(
                     "calls" to payload,
@@ -768,10 +1049,7 @@ class EnforcementService : Service() {
                 "at" to it.date,
             )
         }
-        FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .collection("smsHistory").document("current")
+        reportDoc(familyId, childId, "smsHistory")
             .set(
                 mapOf(
                     "messages" to payload,
@@ -783,6 +1061,10 @@ class EnforcementService : Service() {
     }
 
     private var lastMessagesReport = 0L
+
+    /** Newest message time already written per chat, so the chat list's order
+     *  can't be dragged backwards by a re-sent old message. */
+    private val threadLatestAt = HashMap<String, Long>()
 
     /**
      * Flushes queued chat messages captured from messaging apps. Each message
@@ -801,6 +1083,7 @@ class EnforcementService : Service() {
         lastMessagesReport = now
 
         val db = FirebaseFirestore.getInstance()
+        val deviceUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
         val threads = db.collection("families").document(familyId)
             .collection("children").document(childId)
             .collection("chatThreads")
@@ -810,13 +1093,21 @@ class EnforcementService : Service() {
         val latestAt = HashMap<String, Long>()
         for (m in pending) {
             val key = hash("${m.app}\u0000${m.sender}")
-            // Chat-time label used for both display and a stable, dedup-safe id
-            // (so notification + scrape + OCR of one message become one doc).
+            // The id must come from the message alone. It used to fall back to
+            // the capture time when the row's own time wasn't readable, so
+            // re-opening a chat minted a new id for the same message and the
+            // parent saw it repeated once per visit.
             val timeLabel = m.timeLabel.ifBlank { chatTimeFmt.format(Date(m.at)) }
-            val timeKey = timeLabel.uppercase(Locale.ROOT).replace(" ", "")
-            val sortAt = chatSortAt(timeLabel, m.at)
-            val msgId = hash("${m.app}\u0000${m.sender}\u0000${m.text}\u0000$timeKey")
-            val doc = threads.document(key).collection("messages").document(msgId)
+            val sortAt = chatSortAt(timeLabel, m.at, m.slot, m.dayStart)
+            val messages = threads.document(key).collection("messages")
+            // MessageStore owns the id: it remembers what was already uploaded
+            // for a message, so a later sighting that finally reveals the day or
+            // the bubble's time supersedes that document instead of adding a
+            // second copy of the same message.
+            if (m.replaces.isNotBlank()) {
+                batch.delete(messages.document(hash(m.replaces)))
+            }
+            val doc = messages.document(hash(m.docKey))
             batch.set(
                 doc,
                 mapOf(
@@ -826,6 +1117,7 @@ class EnforcementService : Service() {
                     "outgoing" to m.outgoing,
                     "time" to timeLabel,
                     "at" to sortAt,
+                    "deviceUid" to deviceUid,
                     "createdAt" to FieldValue.serverTimestamp(),
                 ),
                 SetOptions.merge()
@@ -836,6 +1128,13 @@ class EnforcementService : Service() {
             }
         }
         for ((key, m) in latest) {
+            val at = latestAt[key] ?: m.at
+            // The chat list is ordered by this. Re-uploading an older message
+            // (one that only just revealed its date) used to overwrite it with
+            // that older time and drop a live conversation down the list, so a
+            // thread's time only ever moves forward.
+            if (at < (threadLatestAt[key] ?: 0L)) continue
+            threadLatestAt[key] = at
             val summary = hashMapOf<String, Any>(
                 "sender" to m.sender,
                 "app" to m.app,
@@ -843,32 +1142,65 @@ class EnforcementService : Service() {
                 "lastText" to m.text,
                 "lastOutgoing" to m.outgoing,
                 "lastTime" to m.timeLabel.ifBlank { chatTimeFmt.format(Date(m.at)) },
-                "at" to (latestAt[key] ?: m.at),
+                "at" to at,
+                "deviceUid" to deviceUid,
                 "updatedAt" to FieldValue.serverTimestamp(),
             )
             if (m.number.isNotBlank()) summary["number"] = m.number
             batch.set(threads.document(key), summary, SetOptions.merge())
         }
-        batch.commit().addOnFailureListener { MessageStore.requeue(pending) }
+        batch.commit().addOnFailureListener {
+            MessageStore.requeue(pending)
+            Diag.warn(this, "reportMessages", it)
+        }
     }
 
     private val chatTimeFmt = SimpleDateFormat("h:mm a", Locale.getDefault())
 
-    /** Builds a sortable epoch-millis from a chat time label like "10:24 PM". */
-    private fun chatSortAt(label: String, fallback: Long): Long {
+    /**
+     * Builds a sortable epoch-millis from a chat time label like "10:24 PM".
+     *
+     * [dayStart] is the day the message's date separator resolved to. Without
+     * it only the time of day is known, so messages from different days
+     * interleaved — yesterday's 4pm sorting after today's 3pm.
+     *
+     * [ordinal] separates messages that share a minute. The label has no
+     * seconds, so they used to collide on the same millisecond and Firestore
+     * fell back to ordering them by their (hashed, effectively random) id.
+     */
+    private fun chatSortAt(
+        label: String,
+        fallback: Long,
+        ordinal: Int = 0,
+        dayStart: Long = 0L,
+    ): Long {
+        val slot = ordinal.coerceIn(0, 999)
         val match = Regex("^(\\d{1,2}):(\\d{2})\\s*([AaPp][Mm])?").find(label)
-            ?: return fallback
-        var h = match.groupValues[1].toIntOrNull() ?: return fallback
-        val min = match.groupValues[2].toIntOrNull() ?: return fallback
+            ?: return (if (dayStart > 0L) dayStart else fallback) + slot
+        var h = match.groupValues[1].toIntOrNull()
+            ?: return (if (dayStart > 0L) dayStart else fallback) + slot
+        val min = match.groupValues[2].toIntOrNull()
+            ?: return (if (dayStart > 0L) dayStart else fallback) + slot
         val ap = match.groupValues[3].uppercase(Locale.ROOT)
         if (ap == "PM" && h != 12) h += 12
         if (ap == "AM" && h == 12) h = 0
-        return Calendar.getInstance().apply {
+        // A known day is exact; anchor to it and skip the guesswork below.
+        if (dayStart > 0L) {
+            return dayStart + h * 3_600_000L + min * 60_000L + slot
+        }
+        val cal = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, h)
             set(Calendar.MINUTE, min)
             set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
+            set(Calendar.MILLISECOND, slot)
+        }
+        // No separator was visible, so the day is inferred: a time that would
+        // land in the future can't be from today. Slack absorbs the label's
+        // missing seconds and any clock skew.
+        if (cal.timeInMillis > System.currentTimeMillis() + FUTURE_SLACK_MS) {
+            cal.add(Calendar.DAY_OF_YEAR, -1)
+        }
+        return cal.timeInMillis
     }
 
     /** Stable hex hash used for deterministic (dedup-safe) Firestore doc ids. */
@@ -897,10 +1229,7 @@ class EnforcementService : Service() {
         val payload = YoutubeStore.snapshot()
         if (payload.isEmpty()) return
         lastYoutubeReport = now
-        FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .collection("youtubeHistory").document("current")
+        reportDoc(familyId, childId, "youtubeHistory")
             .set(
                 mapOf(
                     "videos" to payload,
@@ -939,40 +1268,91 @@ class EnforcementService : Service() {
     }
 
     /**
-     * Listens to the family's app rules and applies blocks locally. Blocked
-     * packages are suspended (Device Owner); removed ones are un-suspended.
-     * Doc id == package name (written by the parent app).
+     * Listens to the family-wide ("common") app rules and applies blocks
+     * locally. These apply to every child in the family. Merged with this
+     * child's own rules in [applyMergedAppRules]. Doc id == package name.
      */
     private fun attachAppRulesListener() {
         val familyId = ChildStore.familyId(this) ?: return
-        appRulesListener = FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("appRules")
-            .addSnapshotListener { snaps, _ ->
-                if (snaps == null) return@addSnapshotListener
-                val blocked = snaps.documents
-                    .filter { it.getBoolean("blocked") == true }
-                    .map { it.id }
-                    .toSet()
-                // Family-wide "banking mode" allow-list: apps the parent marked
-                // usable while a protection is off. Union with the built-in
-                // defaults so common banking/UPI apps work out of the box.
-                val bankingAllowed = snaps.documents
-                    .filter { it.getBoolean("bankingAllowed") == true }
-                    .map { it.id }
-                    .toSet()
-                SensitiveApps.packages = SensitiveApps.DEFAULTS + bankingAllowed
-                // Feed the accessibility blocker (works without Device Owner).
-                BlockedApps.packages = blocked
-                val toUnblock = currentBlocked - blocked
-                if (toUnblock.isNotEmpty()) {
-                    AppBlocker.clearBlocked(this, toUnblock.toList())
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("families").document(familyId)
+                .collection("appRules")
+                .addSnapshotListener { snaps, e ->
+                    if (e != null) {
+                        Diag.warn(this, "appRulesListener", e)
+                        return@addSnapshotListener
+                    }
+                    if (snaps == null) return@addSnapshotListener
+                    familyBlocked = snaps.documents
+                        .filter { it.getBoolean("blocked") == true }
+                        .map { it.id }
+                        .toSet()
+                    familyBankingAllowed = snaps.documents
+                        .filter { it.getBoolean("bankingAllowed") == true }
+                        .map { it.id }
+                        .toSet()
+                    applyMergedAppRules()
                 }
-                if (blocked.isNotEmpty()) {
-                    AppBlocker.setBlocked(this, blocked.toList())
+        )
+    }
+
+    /**
+     * Listens to THIS child's own app rules (set from the child's screen in the
+     * parent app), so a block chosen for one child doesn't affect siblings.
+     * Merged with the family-wide rules in [applyMergedAppRules].
+     */
+    private fun attachChildAppRulesListener() {
+        val familyId = ChildStore.familyId(this) ?: return
+        val childId = ChildStore.childId(this) ?: return
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("families").document(familyId)
+                .collection("children").document(childId)
+                .collection("appRules")
+                .addSnapshotListener { snaps, e ->
+                    if (e != null) {
+                        Diag.warn(this, "childAppRulesListener", e)
+                        return@addSnapshotListener
+                    }
+                    if (snaps == null) return@addSnapshotListener
+                    childBlocked = snaps.documents
+                        .filter { it.getBoolean("blocked") == true }
+                        .map { it.id }
+                        .toSet()
+                    childBankingAllowed = snaps.documents
+                        .filter { it.getBoolean("bankingAllowed") == true }
+                        .map { it.id }
+                        .toSet()
+                    applyMergedAppRules()
                 }
-                currentBlocked = blocked
-            }
+        )
+    }
+
+    /**
+     * Combines the family-wide and per-child rules (an app is blocked if EITHER
+     * blocks it) and applies them: blocked packages are suspended (Device
+     * Owner); removed ones are un-suspended. Also feeds the accessibility
+     * blocker and the banking-mode allow-list.
+     */
+    private fun applyMergedAppRules() {
+        val blocked = familyBlocked + childBlocked
+        val bankingAllowed = familyBankingAllowed + childBankingAllowed
+        // Publish the banking allow-list BEFORE the block list. Both are read by
+        // the accessibility service and the lockbox, and applying them in this
+        // order means a rule change can never leave a moment where an app is
+        // blocked but not yet known to be banking-allowed.
+        SensitiveApps.packages = SensitiveApps.DEFAULTS + bankingAllowed
+        // Feed the accessibility blocker (works without Device Owner).
+        BlockedApps.packages = blocked
+        val toUnblock = currentBlocked - blocked
+        if (toUnblock.isNotEmpty()) {
+            AppBlocker.clearBlocked(this, toUnblock.toList())
+        }
+        if (blocked.isNotEmpty()) {
+            AppBlocker.setBlocked(this, blocked.toList())
+        }
+        currentBlocked = blocked
     }
 
     /**
@@ -983,65 +1363,117 @@ class EnforcementService : Service() {
      */
     private fun attachWebFilterListener() {
         val familyId = ChildStore.familyId(this) ?: return
-        webFilterListener = FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("rules").document("webFilter")
-            .addSnapshotListener { snap, _ ->
-                // Safe browsing is ON by default: it's only OFF when the parent
-                // has explicitly set enabled = false.
-                val enabled = snap == null || !snap.exists() ||
-                    snap.getBoolean("enabled") != false
-                val sites = (snap?.get("blockedSites") as? List<*>)
-                    ?.mapNotNull { (it as? String)?.lowercase()?.removePrefix("www.") }
-                    ?.toSet() ?: emptySet()
-                // Domain categories. If the parent has never set this field, fall
-                // back to the protective defaults (adult, gambling, drugs, weapons,
-                // violence) so known bad domains are blocked out of the box.
-                val hasCatsField = snap != null && snap.exists() &&
-                    snap.contains("blockedCategories")
-                val cats = if (hasCatsField) {
-                    (snap!!.get("blockedCategories") as? List<*>)
-                        ?.mapNotNull { it as? String }?.toSet() ?: emptySet()
-                } else {
-                    DEFAULT_PROTECTIVE_CATEGORIES
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("families").document(familyId)
+                .collection("rules").document("webFilter")
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Diag.warn(this, "webFilterListener", e)
+                        return@addSnapshotListener
+                    }
+                    // Only the per-family custom blocked sites live here now. The
+                    // safe-browsing master, blocked categories, browser lock and
+                    // content keywords are all global (site-admin) settings — see
+                    // attachWebPolicyListener / attachContentFilterListener.
+                    WebFilter.updateSites(
+                        (snap?.get("blockedSites") as? List<*>)
+                            ?.mapNotNull { (it as? String)?.lowercase()?.removePrefix("www.") }
+                            ?.toSet() ?: emptySet()
+                    )
+                    // The old DNS-filter VPN is no longer used.
+                    WebFilterVpnService.stop(this)
                 }
-                WebFilter.enabled = enabled
-                WebFilter.blockedSites = sites
-                WebFilter.enabledCategories = cats
-                WebFilter.blockOtherBrowsers = snap?.getBoolean("blockOtherBrowsers") == true
-                WebFilter.approvedBrowser =
-                    (snap?.get("approvedBrowser") as? String)?.takeIf { it.isNotBlank() }
-                // Content-based blocking keywords (page-text scanning). Always
-                // applied, independent of the URL filter's enabled flag.
-                ContentFilter.parentKeywords = (snap?.get("blockedKeywords") as? List<*>)
-                    ?.mapNotNull { (it as? String)?.trim()?.lowercase()?.takeIf { s -> s.length >= 3 } }
-                    ?.toSet() ?: emptySet()
-                if (enabled && cats.isNotEmpty()) {
-                    // Load category domain lists (off the main thread) for matching.
-                    Thread { runCatching { CategoryFeed.loadCache(applicationContext) } }
-                        .apply { isDaemon = true }.start()
-                    CategoryFeed.ensure(applicationContext, cats)
-                }
-                // The old DNS-filter VPN is no longer used.
-                WebFilterVpnService.stop(this)
-            }
+        )
     }
 
     /**
-     * Watches the global content-filter config (`appConfig/contentFilter`) so
-     * the built-in page-content keyword lists can be extended from the backend
-     * without shipping an app update.
+     * Watches the global content-filter config (`appConfig/contentFilter`): the
+     * site admin's per-category keyword lists plus any flat `keywords`. All are
+     * unioned into the page-content block set and applied on every device.
      */
     private fun attachContentFilterListener() {
-        contentFilterListener = FirebaseFirestore.getInstance()
-            .collection("appConfig").document("contentFilter")
-            .addSnapshotListener { snap, _ ->
-                ContentFilter.backendKeywords = (snap?.get("keywords") as? List<*>)
-                    ?.mapNotNull {
-                        (it as? String)?.trim()?.lowercase()?.takeIf { s -> s.length >= 3 }
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("appConfig").document("contentFilter")
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Diag.warn(this, "contentFilterListener", e)
+                        return@addSnapshotListener
                     }
-                    ?.toSet() ?: emptySet()
-            }
+                    val words = HashSet<String>()
+                    fun collect(list: Any?): Set<String> {
+                        val out = HashSet<String>()
+                        (list as? List<*>)?.forEach { item ->
+                            (item as? String)?.trim()?.lowercase()
+                                ?.takeIf { it.length >= 3 }?.let { out.add(it) }
+                        }
+                        words.addAll(out)
+                        return out
+                    }
+                    collect(snap?.get("keywords"))
+                    val byCategory = HashMap<String, Set<String>>()
+                    (snap?.get("categories") as? Map<*, *>)?.forEach { (cat, list) ->
+                        val name = (cat as? String)?.trim()?.lowercase()
+                        val terms = collect(list)
+                        if (!name.isNullOrEmpty() && terms.isNotEmpty()) {
+                            byCategory[name] = terms
+                        }
+                    }
+                    ContentFilter.backendKeywords = words
+                    ContentFilter.backendByCategory = byCategory
+                }
+        )
+    }
+
+    /**
+     * Watches the site admin's global browser / safe-browsing policy
+     * (`appConfig/webPolicy`): the safe-browsing master switch, whether browsers
+     * other than Chrome are blocked, and whether incognito is allowed.
+     */
+    private fun attachWebPolicyListener() {
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("appConfig").document("webPolicy")
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Diag.warn(this, "webPolicyListener", e)
+                        return@addSnapshotListener
+                    }
+                    // Safe browsing is permanent: nobody, not even the site
+                    // admin, can switch off the filter that makes this app
+                    // worth installing. Only the extras below are configurable.
+                    val allowIncognito = snap?.getBoolean("allowIncognito") == true
+                    DeviceLockdown.setIncognitoAllowed(this, allowIncognito)
+                    // Blocked categories are global too. Fall back to the protective
+                    // defaults until the site admin sets them.
+                    val hasCats = snap != null && snap.exists() &&
+                        snap.contains("blockedCategories")
+                    val cats = if (hasCats) {
+                        (snap!!.get("blockedCategories") as? List<*>)
+                            ?.mapNotNull { it as? String }?.toSet() ?: emptySet()
+                    } else {
+                        DEFAULT_PROTECTIVE_CATEGORIES
+                    }
+                    // One atomic swap, so a decision can never see the new
+                    // categories alongside the old safe-browsing flag.
+                    WebFilter.updatePolicy(
+                        enabled = true,
+                        blockOtherBrowsers = snap?.getBoolean("blockOtherBrowsers") == true,
+                        categories = cats,
+                    )
+                    if (cats.isNotEmpty()) {
+                        Thread {
+                            try {
+                                CategoryFeed.loadCache(applicationContext)
+                            } catch (t: Throwable) {
+                                Diag.warn(this, "categoryFeedCache", t)
+                            }
+                        }.apply { isDaemon = true }.start()
+                        CategoryFeed.ensure(applicationContext, cats)
+                    }
+                }
+        )
     }
 
     private fun startAsForeground() {
@@ -1078,6 +1510,14 @@ class EnforcementService : Service() {
         private const val NOTIF_ID = 1001
         private const val EVAL_INTERVAL_MS = 30_000L
         private const val LOCKGUARD_INTERVAL_MS = 700L
+        private const val LOCKGUARD_IDLE_MS = 3_000L
+
+        /** Activity feeds stored as one array document per device. */
+        private val REPORT_FEEDS = listOf(
+            "webHistory", "callHistory", "smsHistory", "youtubeHistory",
+        )
+        private const val FOREGROUND_FRESH_MS = 10_000L
+        private const val FOREGROUND_QUERY_MS = 1_500L
         private const val HEARTBEAT_MS = 120_000L
         private const val USAGE_MS = 300_000L
         private const val LOCATION_MS = 120_000L
@@ -1092,6 +1532,8 @@ class EnforcementService : Service() {
         private const val MESSAGES_MS = 30_000L
         private const val YOUTUBE_MS = 30_000L
         private const val UPDATE_CHECK_MS = 3 * 60 * 60 * 1000L // 3 hours
+        /** Tolerance before a chat time is treated as belonging to yesterday. */
+        private const val FUTURE_SLACK_MS = 5 * 60 * 1000L
 
         /** Domain categories blocked by default until the parent customises them. */
         private val DEFAULT_PROTECTIVE_CATEGORIES =
@@ -1105,6 +1547,24 @@ class EnforcementService : Service() {
                 ctx.startForegroundService(intent)
             } else {
                 ctx.startService(intent)
+            }
+        }
+
+        /**
+         * After Temporary Access, the child restores protection by turning the
+         * accessibility service back on. When they do, lift the call-log/SMS
+         * denials we applied for the banking session so monitoring fully resumes
+         * and the lockbox can release. Safe to call often — it no-ops unless a
+         * Temporary Access session is active and accessibility is back on.
+         */
+        fun restoreTempAccessIfRecovered(ctx: Context) {
+            if (!ChildStore.tempAccess(ctx)) return
+            if (Permissions.hasAccessibility(ctx)) {
+                DeviceLockdown.setSensitivePermissions(ctx, granted = true)
+                // Re-enable the notification-listener component so the child can
+                // allow Notification access again from the setup screen.
+                DeviceLockdown.setNotificationListenerEnabled(ctx, enabled = true)
+                ChildStore.setTempAccess(ctx, false)
             }
         }
     }

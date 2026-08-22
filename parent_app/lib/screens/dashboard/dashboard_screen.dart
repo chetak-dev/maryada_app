@@ -1,24 +1,26 @@
-import 'dart:async';
+﻿import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../data/app_update_repository.dart';
 import '../../data/db.dart';
 import '../../data/family_repository.dart';
 import '../../data/rules_repository.dart';
 import '../../data/user_repository.dart';
-import '../../data/web_filter_repository.dart';
 import '../../config.dart';
 import '../../models/app_user.dart';
 import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../models/screen_time_rule.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/access_scope.dart';
 import '../../widgets/brand_mark.dart';
-import '../../widgets/status_pill.dart';
+import '../../widgets/profile_button.dart';
 import '../../widgets/theme_toggle_button.dart';
-import '../add_child/add_child_screen.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../child_detail/child_detail_screen.dart';
+import '../children/children_screen.dart';
+import '../children/new_profile_dialog.dart';
 import '../screen_time/screen_time_screen.dart';
 import '../web_filter/web_filter_screen.dart';
 
@@ -35,21 +37,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // Bumped by the sync button to re-subscribe the live streams (forces a fresh
-  // read from the server when the linked state looks stale/offline).
-  int _sync = 0;
-
   bool get _live => widget.uid != null && Db.ready;
-
-  void _resync() {
-    setState(() => _sync++);
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(
-        content: Text('Syncing with linked devices…'),
-        duration: Duration(seconds: 2),
-      ));
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -58,32 +46,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         titleSpacing: AppSpacing.md,
         title: const BrandLockup(markSize: 32),
-        actions: const [ThemeToggleButton(), SizedBox(width: AppSpacing.xs)],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xxl),
-        children: [
-          const _DashboardHero(),
-          const SizedBox(height: AppSpacing.lg),
-          _WebFilterAlertBanner(uid: _live ? uid : null),
-          _FamilyControls(key: ValueKey('controls_$_sync'), uid: _live ? uid : null),
-          const SizedBox(height: AppSpacing.lg),
-          _FamilyChildren(
-            key: ValueKey('children_$_sync'),
-            uid: _live ? uid : null,
-            onSync: _resync,
-          ),
+        actions: const [
+          ThemeToggleButton(),
+          ProfileButton(),
+          SizedBox(width: AppSpacing.xs)
         ],
+      ),
+      body: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.md),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _GreetingHeader(uid: _live ? uid : null),
+            const SizedBox(height: AppSpacing.md),
+            _FamilyChildren(uid: _live ? uid : null),
+            const SizedBox(height: AppSpacing.md),
+            _FamilyControls(uid: _live ? uid : null),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// A warm gradient greeting hero that anchors the "Royal & Warm" identity at
-/// the top of the home tab.
-class _DashboardHero extends StatelessWidget {
-  const _DashboardHero();
+/// The banner that opens the home screen: the day, a greeting, and how the
+/// family is doing right now.
+class _GreetingHeader extends StatelessWidget {
+  const _GreetingHeader({this.uid});
+
+  final String? uid;
 
   String get _greeting {
     final h = DateTime.now().hour;
@@ -92,50 +84,81 @@ class _DashboardHero extends StatelessWidget {
     return 'Good evening';
   }
 
+  String get _date {
+    const months = [
+      'January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December',
+    ];
+    const days = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
+    ];
+    final now = DateTime.now();
+    return '${days[now.weekday - 1]}, ${now.day} ${months[now.month - 1]}';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.lg),
+      // Clipped so the oversized shield can bleed past the edges without
+      // squaring off the corners.
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         gradient: AppColors.brandGradient,
         borderRadius: BorderRadius.circular(AppRadius.lg),
         boxShadow: AppShadow.raised,
       ),
-      child: Row(
+      child: Stack(
         children: [
-          Expanded(
+          Positioned(
+            right: -26,
+            bottom: -38,
+            child: Icon(
+              Icons.shield_rounded,
+              size: 160,
+              color: Colors.white.withValues(alpha: 0.10),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(AppSpacing.md),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  _greeting,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.white.withValues(alpha: 0.85),
+                  _date.toUpperCase(),
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.75),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.0,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 5),
                 Text(
-                  'Your family, at a glance',
-                  style: theme.textTheme.titleLarge?.copyWith(
+                  _greeting,
+                  style: const TextStyle(
                     color: Colors.white,
+                    fontSize: 27,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
+                    height: 1.1,
                   ),
                 ),
+                const SizedBox(height: 2),
+                Text(
+                  'An Initiative by ISKCON Brahmapur',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.72),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.md),
+                Container(height: 1, color: Colors.white.withValues(alpha: 0.18)),
+                const SizedBox(height: AppSpacing.sm),
+                _FamilyPulse(uid: uid),
               ],
             ),
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(AppRadius.md),
-            ),
-            child: const Icon(Icons.shield_moon_rounded,
-                color: Colors.white, size: 28),
           ),
         ],
       ),
@@ -143,90 +166,106 @@ class _DashboardHero extends StatelessWidget {
   }
 }
 
-/// A prominent warning shown on the home screen whenever the family's web
-/// filter is turned off, so the parent notices no sites are being blocked.
-class _WebFilterAlertBanner extends StatelessWidget {
-  const _WebFilterAlertBanner({required this.uid});
+/// The one-line answer to "is everything alright?", inside the banner.
+class _FamilyPulse extends StatelessWidget {
+  const _FamilyPulse({required this.uid});
   final String? uid;
 
   @override
   Widget build(BuildContext context) {
-    if (uid == null || !Db.ready) return const SizedBox.shrink();
-    return StreamBuilder<List<FamilyModel>>(
-      stream: FamilyRepository.instance.watchFamilies(uid!),
-      builder: (context, famSnap) {
-        final fams = famSnap.data ?? const <FamilyModel>[];
-        if (fams.isEmpty) return const SizedBox.shrink();
-        final familyId = fams.first.id;
-        return StreamBuilder<WebFilterSettings>(
-          stream: WebFilterRepository.instance.watch(familyId),
-          builder: (context, snap) {
-            final off = snap.hasData && !snap.data!.enabled;
-            if (!off) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.lg),
-              child: Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(AppRadius.lg),
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => WebFilterScreen(familyId: familyId),
-                    ),
-                  ),
-                  child: Container(
-                    padding: const EdgeInsets.all(AppSpacing.md),
-                    decoration: BoxDecoration(
-                      color: AppColors.danger.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(AppRadius.lg),
-                      border: Border.all(
-                          color: AppColors.danger.withValues(alpha: 0.30)),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: AppColors.danger.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(AppRadius.md),
-                          ),
-                          child: const Icon(Icons.gpp_bad_rounded,
-                              color: AppColors.danger, size: 22),
-                        ),
-                        const SizedBox(width: AppSpacing.md),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Web filter is off',
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                      color: AppColors.danger)),
-                              SizedBox(height: 2),
-                              Text(
-                                'No websites are blocked for your child. Tap to turn on.',
-                                style: TextStyle(
-                                    color: AppColors.textSecondary,
-                                    fontSize: 13),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const Icon(Icons.chevron_right_rounded,
-                            color: AppColors.danger),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            );
-          },
+    if (uid == null) {
+      return const _PulseRow(profiles: 0, protected: 0, attention: 0);
+    }
+    return StreamBuilder<List<({Child child, String familyId})>>(
+      stream: FamilyRepository.instance.watchAllChildren(),
+      builder: (context, snap) {
+        final kids = snap.data ?? const <({Child child, String familyId})>[];
+        final protected = kids
+            .where((k) => k.child.effectiveStatus == ChildStatus.online)
+            .length;
+        return _PulseRow(
+          profiles: kids.length,
+          protected: protected,
+          attention: kids.length - protected,
         );
       },
     );
   }
 }
+
+class _PulseRow extends StatelessWidget {
+  const _PulseRow({
+    required this.profiles,
+    required this.protected,
+    required this.attention,
+  });
+
+  final int profiles;
+  final int protected;
+  final int attention;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        _PulseStat(
+            value: profiles, label: profiles == 1 ? 'Profile' : 'Profiles'),
+        _PulseDivider(),
+        _PulseStat(value: protected, label: 'Protected'),
+        _PulseDivider(),
+        _PulseStat(value: attention, label: 'Need attention'),
+      ],
+    );
+  }
+}
+
+class _PulseDivider extends StatelessWidget {
+  const _PulseDivider();
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 1,
+        height: 26,
+        color: Colors.white.withValues(alpha: 0.18),
+      );
+}
+
+class _PulseStat extends StatelessWidget {
+  const _PulseStat({required this.value, required this.label});
+  final int value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            '$value',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+              height: 1.1,
+            ),
+          ),
+          const SizedBox(height: 1),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.75),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 /// The Screen-time control tile, which shows a live red badge on the home
 /// screen whenever the device is paused or bedtime is on.
@@ -256,8 +295,8 @@ class _ScreenTimeControlTile extends StatelessWidget {
       return _ControlTile(
         icon: Icons.timelapse_rounded,
         color: AppColors.primary,
-        title: 'Screen time & schedules',
-        subtitle: 'Bedtime, downtime, pause now',
+        title: 'Screen time',
+        subtitle: 'Bedtime & pause',
         onTap: () => _open(context),
       );
     }
@@ -276,8 +315,8 @@ class _ScreenTimeControlTile extends StatelessWidget {
         return _ControlTile(
           icon: Icons.timelapse_rounded,
           color: AppColors.primary,
-          title: 'Screen time & schedules',
-          subtitle: 'Bedtime, downtime, pause now',
+          title: 'Screen time',
+          subtitle: 'Bedtime & pause',
           badge: badge,
           onTap: () => _open(context),
         );
@@ -286,8 +325,8 @@ class _ScreenTimeControlTile extends StatelessWidget {
   }
 }
 
-/// The Web-filter control tile, showing a live green "ON" badge on the home
-/// screen when safe browsing is enabled.
+/// The Web-filter control tile. Safe browsing can't be switched off by anyone,
+/// so the badge is a statement of fact rather than a live flag.
 class _WebFilterControlTile extends StatelessWidget {
   const _WebFilterControlTile({required this.familyId});
   final String? familyId;
@@ -300,29 +339,14 @@ class _WebFilterControlTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (familyId == null) {
-      return _ControlTile(
-        icon: Icons.public_rounded,
-        color: AppColors.success,
-        title: 'Web filter',
-        subtitle: 'Safe browsing, block sites',
-        onTap: () => _open(context),
-      );
-    }
-    return StreamBuilder<WebFilterSettings>(
-      stream: WebFilterRepository.instance.watch(familyId!),
-      builder: (context, snap) {
-        final on = snap.data?.enabled ?? false;
-        return _ControlTile(
-          icon: Icons.public_rounded,
-          color: AppColors.success,
-          title: 'Web filter',
-          subtitle: 'Safe browsing, block sites',
-          badge: on ? 'ON' : null,
-          badgeColor: AppColors.success,
-          onTap: () => _open(context),
-        );
-      },
+    return _ControlTile(
+      icon: Icons.public_rounded,
+      color: AppColors.success,
+      title: 'Web filter',
+      subtitle: 'Safe browsing',
+      badge: 'ON',
+      badgeColor: AppColors.success,
+      onTap: () => _open(context),
     );
   }
 }
@@ -330,7 +354,7 @@ class _WebFilterControlTile extends StatelessWidget {
 /// Family-wide control tiles. Supplies the live familyId (when connected) so
 /// editors can persist; opens in demo mode otherwise.
 class _FamilyControls extends StatelessWidget {
-  const _FamilyControls({super.key, required this.uid});
+  const _FamilyControls({required this.uid});
   final String? uid;
 
   @override
@@ -358,24 +382,29 @@ class _ControlsCard extends StatelessWidget {
       children: [
         _SectionLabel(title: 'Family controls'),
         const SizedBox(height: AppSpacing.sm),
-        Card(
-          child: Column(
+        // Side by side rather than stacked: three full-width rows pushed the
+        // home screen past a single screenful.
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _ScreenTimeControlTile(familyId: familyId),
-              const Divider(height: 1, indent: 64),
-              _ControlTile(
-                icon: Icons.apps_rounded,
-                color: AppColors.info,
-                title: 'App rules',
-                subtitle: 'Block apps, per-app limits',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => AppRulesScreen(familyId: familyId),
+              Expanded(child: _ScreenTimeControlTile(familyId: familyId)),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(
+                child: _ControlTile(
+                  icon: Icons.apps_rounded,
+                  color: AppColors.info,
+                  title: 'App rules',
+                  subtitle: 'Block apps',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => AppRulesScreen(familyId: familyId),
+                    ),
                   ),
                 ),
               ),
-              const Divider(height: 1, indent: 64),
-              _WebFilterControlTile(familyId: familyId),
+              const SizedBox(width: AppSpacing.sm),
+              Expanded(child: _WebFilterControlTile(familyId: familyId)),
             ],
           ),
         ),
@@ -387,9 +416,8 @@ class _ControlsCard extends StatelessWidget {
 /// The "Your family" section. Demo cards when [uid] is null; live Firestore
 /// families/children when set.
 class _FamilyChildren extends StatefulWidget {
-  const _FamilyChildren({super.key, required this.uid, this.onSync});
+  const _FamilyChildren({required this.uid});
   final String? uid;
-  final VoidCallback? onSync;
 
   @override
   State<_FamilyChildren> createState() => _FamilyChildrenState();
@@ -397,6 +425,9 @@ class _FamilyChildren extends StatefulWidget {
 
 class _FamilyChildrenState extends State<_FamilyChildren> {
   Timer? _ticker;
+  bool _provisioning = false;
+  int _latestVersionCode = 0;
+  StreamSubscription<AppUpdateConfig>? _updateSub;
 
   @override
   void initState() {
@@ -406,64 +437,47 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
     _ticker = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) setState(() {});
     });
+    // Track the latest published child-app version so we can flag devices that
+    // haven't updated.
+    if (Db.ready) {
+      _updateSub = AppUpdateRepository.instance.watch().listen((c) {
+        if (mounted) setState(() => _latestVersionCode = c.versionCode);
+      });
+    }
   }
 
   @override
   void dispose() {
     _ticker?.cancel();
+    _updateSub?.cancel();
     super.dispose();
   }
 
-  /// The "Sync" + "Add child" buttons shown next to the family section title.
-  /// When [atLimit] is set the child limit has been reached, so adding is
-  /// blocked with an explanatory message instead.
-  Widget _headerActions(VoidCallback onAdd,
-      {bool atLimit = false, int maxChildren = 0}) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (widget.onSync != null)
-          TextButton.icon(
-            onPressed: widget.onSync,
-            icon: const Icon(Icons.sync_rounded, size: 18),
-            label: const Text('Sync'),
-          ),
-        TextButton.icon(
-          onPressed: atLimit
-              ? () => ScaffoldMessenger.of(context)
-                ..hideCurrentSnackBar()
-                ..showSnackBar(SnackBar(
-                  content: Text(
-                    'Child limit reached ($maxChildren). Ask your admin to raise it.',
-                  ),
-                ))
-              : onAdd,
-          icon: Icon(atLimit ? Icons.lock_outline_rounded : Icons.add,
-              size: 18),
-          label: const Text('Add child'),
-        ),
-      ],
-    );
+  /// "See all" opens the Profiles page â€” which is also where profiles are
+  /// created and devices paired, so it shows even while the family is empty.
+  Widget _headerActions({VoidCallback? onSeeAll}) {
+    if (onSeeAll == null) return const SizedBox.shrink();
+    return TextButton(onPressed: onSeeAll, child: const Text('See all'));
   }
 
   @override
   Widget build(BuildContext context) {
     final uid = widget.uid;
+    final canEdit = AccessScope.of(context);
     if (uid == null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _SectionLabel(
-            title: 'Your family (${demoChildren.length})',
-            trailing: _headerActions(() => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const AddChildScreen()),
-                )),
+            title: 'Your family',
+            trailing: _headerActions(),
           ),
           const SizedBox(height: AppSpacing.sm),
-          ...demoChildren.map((c) => Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.sm),
-                child: _ChildCard(child: c),
-              )),
+          _FamilyStrip(
+            kids: [
+              for (final c in demoChildren) (child: c, familyId: ''),
+            ],
+          ),
         ],
       );
     }
@@ -473,58 +487,86 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
       stream: UserRepository.instance.watch(uid),
       builder: (context, userSnap) {
         final maxChildren = userSnap.data?.maxChildren ?? kDefaultMaxChildren;
-        return StreamBuilder<List<FamilyModel>>(
-          stream: repo.watchFamilies(uid),
-          builder: (context, famSnap) {
-            if (famSnap.connectionState == ConnectionState.waiting) {
-              return const Padding(
-                padding: EdgeInsets.all(AppSpacing.lg),
-                child: Center(child: CircularProgressIndicator()),
-              );
+        // Every org admin sees ALL children across all families.
+        return StreamBuilder<List<({Child child, String familyId})>>(
+          stream: repo.watchAllChildren(),
+          builder: (context, kidSnap) {
+            if (kidSnap.connectionState == ConnectionState.waiting &&
+                !kidSnap.hasData) {
+              return _childrenLoader();
             }
-            final families = famSnap.data ?? const [];
-            if (families.isEmpty) {
-              return _CreateFamilyCard(
-                onCreate: () =>
-                    repo.createFamily(name: 'My Family', ownerUid: uid),
-              );
-            }
-            final family = families.first;
-            return StreamBuilder<List<Child>>(
-              stream: repo.watchChildren(family.id),
-              builder: (context, kidSnap) {
-                final kids = kidSnap.data ?? const <Child>[];
-                final atLimit = kids.length >= maxChildren;
+            final kids = kidSnap.data ?? const [];
+            // The org admin's own family is only the target for "Add child";
+            // provision it lazily for editors. Viewing all children never
+            // depends on having your own family.
+            return StreamBuilder<List<FamilyModel>>(
+              stream: repo.watchFamilies(uid),
+              builder: (context, famSnap) {
+                final families = famSnap.data ?? const <FamilyModel>[];
+                final famReady =
+                    famSnap.connectionState != ConnectionState.waiting;
+                final ownFamilyId =
+                    families.isEmpty ? null : families.first.id;
+                if (canEdit && famReady && families.isEmpty && !_provisioning) {
+                  _provisioning = true;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    FamilyRepository.instance
+                        .createFamily(name: 'My Family', ownerUid: uid);
+                  });
+                }
+                if (families.isNotEmpty) _provisioning = false;
+
+                final canAdd = canEdit && ownFamilyId != null;
+                void openAll([ChildFilter filter = ChildFilter.all]) {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ChildrenScreen(
+                        children: kids,
+                        latestVersionCode: _latestVersionCode,
+                        initialFilter: filter,
+                        familyId: canAdd ? ownFamilyId : null,
+                        maxChildren: maxChildren,
+                      ),
+                    ),
+                  );
+                }
+
+                // The strip's Add chip creates a profile; devices are paired
+                // from inside the profile.
+                void addProfile() {
+                  final ownCount = kids
+                      .where((k) => k.familyId == ownFamilyId)
+                      .length;
+                  if (ownCount >= maxChildren) {
+                    ScaffoldMessenger.of(context)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(SnackBar(
+                        content: Text(
+                          'Child limit reached ($maxChildren). Ask your admin to raise it.',
+                        ),
+                      ));
+                    return;
+                  }
+                  showNewProfileDialog(context, ownFamilyId!);
+                }
+
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _SectionLabel(
-                      title: kids.isEmpty
-                          ? family.name
-                          : '${family.name} (${kids.length})',
-                      trailing: _headerActions(
-                        () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => AddChildScreen(familyId: family.id),
-                          ),
-                        ),
-                        atLimit: atLimit,
-                        maxChildren: maxChildren,
-                      ),
+                      title: 'Your family',
+                      trailing: _headerActions(onSeeAll: openAll),
                     ),
                     const SizedBox(height: AppSpacing.sm),
                     if (kids.isEmpty)
-                      const _EmptyChildren()
+                      _EmptyChildren(
+                        canAdd: canAdd,
+                        onAdd: canAdd ? addProfile : null,
+                      )
                     else
-                      Column(
-                        children: kids
-                            .map((c) => Padding(
-                                  padding: const EdgeInsets.only(
-                                      bottom: AppSpacing.sm),
-                                  child:
-                                      _ChildCard(child: c, familyId: family.id),
-                                ))
-                            .toList(),
+                      _FamilyStrip(
+                        kids: kids,
+                        onAdd: canAdd ? addProfile : null,
                       ),
                   ],
                 );
@@ -535,59 +577,55 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
       },
     );
   }
-}
 
-class _CreateFamilyCard extends StatelessWidget {
-  const _CreateFamilyCard({required this.onCreate});
-  final VoidCallback onCreate;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
-        child: Column(
-          children: [
-            const Icon(Icons.family_restroom_rounded,
-                size: 44, color: AppColors.primary),
-            const SizedBox(height: AppSpacing.sm),
-            const Text('Create your family',
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-            const SizedBox(height: AppSpacing.xs),
-            const Text(
-              'Set up your family to start adding children and devices.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textSecondary),
-            ),
-            const SizedBox(height: AppSpacing.md),
-            FilledButton(onPressed: onCreate, child: const Text('Create family')),
-          ],
+  Widget _childrenLoader() => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Center(
+          child: SizedBox(
+            width: 32,
+            height: 32,
+            child: CircularProgressIndicator(strokeWidth: 3),
+          ),
         ),
-      ),
-    );
-  }
+      );
 }
 
 class _EmptyChildren extends StatelessWidget {
-  const _EmptyChildren();
+  const _EmptyChildren({this.canAdd = true, this.onAdd});
+  final bool canAdd;
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.lg),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
-          children: const [
-            Icon(Icons.child_care_rounded, size: 44, color: AppColors.textMuted),
-            SizedBox(height: AppSpacing.sm),
-            Text('No children yet',
+          children: [
+            const Icon(Icons.child_care_rounded,
+                size: 34, color: AppColors.textMuted),
+            const SizedBox(height: AppSpacing.xs),
+            const Text('No profiles yet',
                 style: TextStyle(fontWeight: FontWeight.w600)),
-            SizedBox(height: AppSpacing.xs),
+            const SizedBox(height: AppSpacing.xs),
             Text(
-              'Tap “Add child” to create a pairing code and link a device.',
+              canAdd
+                  ? 'Create a profile for each child; devices are added from '
+                      'inside the profile.'
+                  : 'Children added by any org admin appear here.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textSecondary),
+              style: TextStyle(
+                  fontSize: 12.5,
+                  color: AppColors.textSecondaryOf(context)),
             ),
+            if (onAdd != null) ...[
+              const SizedBox(height: AppSpacing.sm),
+              FilledButton.icon(
+                onPressed: onAdd,
+                icon: const Icon(Icons.person_add_alt_1_rounded),
+                label: const Text('New profile'),
+              ),
+            ],
           ],
         ),
       ),
@@ -614,66 +652,165 @@ class _SectionLabel extends StatelessWidget {
   }
 }
 
-class _ChildCard extends StatelessWidget {
-  const _ChildCard({required this.child, this.familyId});
-  final Child child;
-  final String? familyId;
+/// The family as people, the Qustodio way: one avatar per child with a status
+/// ring, scrolling horizontally. Tap opens the child; the last chip adds a
+/// device.
+class _FamilyStrip extends StatelessWidget {
+  const _FamilyStrip({required this.kids, this.onAdd});
+
+  final List<({Child child, String familyId})> kids;
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
         borderRadius: BorderRadius.circular(AppRadius.lg),
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute(
-              builder: (_) =>
-                  ChildDetailScreen(child: child, familyId: familyId)),
+        boxShadow: AppShadow.card,
+      ),
+      child: SizedBox(
+        height: 88,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            for (final k in kids)
+              _AvatarChip(child: k.child, familyId: k.familyId),
+            if (onAdd != null) _AddChip(onTap: onAdd!),
+          ],
         ),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Row(
-            children: [
-              CircleAvatar(
-                radius: 26,
-                backgroundColor: child.avatarColor,
-                child: Text(
-                  child.initials,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 20,
+      ),
+    );
+  }
+}
+
+class _AvatarChip extends StatelessWidget {
+  const _AvatarChip({required this.child, required this.familyId});
+  final Child child;
+  final String familyId;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = child.effectiveStatus;
+    final online = status == ChildStatus.online;
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ChildDetailScreen(
+            child: child,
+            familyId: familyId.isEmpty ? null : familyId,
+          ),
+        ),
+      ),
+      child: Container(
+        width: 84,
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                // The ring is the status: green for protected, amber otherwise.
+                Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: status.color, width: 2.5),
+                  ),
+                  child: CircleAvatar(
+                    radius: 21,
+                    backgroundColor: child.avatarColor,
+                    child: Text(
+                      child.initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 17,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(child.name,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium),
-                    const SizedBox(height: 2),
-                    Text(
-                      child.deviceModel,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppColors.textMuted,
-                          ),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 14,
+                    height: 14,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: status.color,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                          color: AppColors.surfaceOf(context), width: 2),
                     ),
-                    const SizedBox(height: AppSpacing.sm),
-                    StatusPill(
-                      label: child.effectiveStatus.label,
-                      color: child.effectiveStatus.color,
-                      icon: child.effectiveStatus.icon,
+                    child: Icon(
+                      online
+                          ? Icons.check_rounded
+                          : Icons.priority_high_rounded,
+                      size: 9,
+                      color: Colors.white,
                     ),
-                  ],
+                  ),
                 ),
+              ],
+            ),
+            const SizedBox(height: 5),
+            Text(
+              child.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 11.5, fontWeight: FontWeight.w600, height: 1.15),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AddChip extends StatelessWidget {
+  const _AddChip({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      onTap: onTap,
+      child: SizedBox(
+        width: 84,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: AppColors.primaryLight,
+                shape: BoxShape.circle,
+                border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.35)),
               ),
-              const Icon(Icons.chevron_right_rounded,
-                  color: AppColors.textMuted),
-            ],
-          ),
+              child: const Icon(Icons.add_rounded,
+                  color: AppColors.primary, size: 24),
+            ),
+            const SizedBox(height: 5),
+            const Text(
+              'Add',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.primary,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -697,7 +834,7 @@ class _ControlTile extends StatelessWidget {
   final String subtitle;
   final VoidCallback onTap;
 
-  /// Optional red status pill (e.g. "PAUSED", "BEDTIME").
+  /// Optional status pill (e.g. "ON", "PAUSED", "BEDTIME").
   final String? badge;
 
   /// Colour of the status pill.
@@ -705,56 +842,80 @@ class _ControlTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
-        child: Icon(icon, color: color, size: 22),
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadow.card,
       ),
-      title: Row(
-        children: [
-          Flexible(
-            child: Text(title,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
-          ),
-          if (badge != null) ...[
-            const SizedBox(width: AppSpacing.sm),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: badgeColor,
-                borderRadius: BorderRadius.circular(AppRadius.sm),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.circle, color: Colors.white, size: 8),
-                  const SizedBox(width: 4),
-                  Text(badge!,
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm, vertical: AppSpacing.md),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        color.withValues(alpha: 0.18),
+                        color.withValues(alpha: 0.08),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(AppRadius.md),
+                  ),
+                  child: Icon(icon, color: color, size: 23),
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 13.5)),
+                const SizedBox(height: 3),
+                // The live badge replaces the subtitle rather than adding a
+                // line, so all three tiles stay the same height.
+                if (badge != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: badgeColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                    ),
+                    child: Text(badge!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: badgeColor,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.4,
+                        )),
+                  )
+                else
+                  Text(subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
                       style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.3,
-                      )),
-                ],
-              ),
+                          color: AppColors.textMuted, fontSize: 11)),
+              ],
             ),
-          ],
-        ],
+          ),
+        ),
       ),
-      subtitle: Text(subtitle),
-      trailing:
-          const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
-      onTap: onTap,
     );
   }
 }

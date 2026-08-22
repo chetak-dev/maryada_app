@@ -23,8 +23,8 @@ android {
         applicationId = "com.guardnest.kid"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 19
+        versionName = "1.0.18"
     }
 
     signingConfigs {
@@ -81,6 +81,13 @@ dependencies {
     implementation("com.google.firebase:firebase-auth-ktx")
     implementation("com.google.firebase:firebase-firestore-ktx")
 
-    // On-device OCR for screenshot -> text (WhatsApp message capture fallback).
-    implementation("com.google.mlkit:text-recognition:16.0.1")
+    // On-device OCR for screenshot -> text (browser content + WhatsApp capture).
+    // Unbundled variant: the ~10 MB recognition model is delivered by Google
+    // Play Services and downloaded on first use, instead of being baked into the
+    // APK for every ABI. Keeps the APK small (the bundled model added ~39 MB).
+    implementation("com.google.android.gms:play-services-mlkit-text-recognition:19.0.1")
+
+    // Plain JVM unit tests for the pure enforcement logic (no device needed):
+    // run with `gradlew :app:testDebugUnitTest`.
+    testImplementation("junit:junit:4.13.2")
 }

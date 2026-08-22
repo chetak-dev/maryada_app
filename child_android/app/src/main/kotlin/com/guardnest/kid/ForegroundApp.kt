@@ -20,29 +20,9 @@ object ForegroundApp {
         changedAt = System.currentTimeMillis()
     }
 
-    /** Known browser packages across the common Android OEMs. */
-    private val BROWSERS: Set<String> = setOf(
-        "com.android.chrome", "com.chrome.beta", "com.chrome.dev", "com.chrome.canary",
-        "org.mozilla.firefox", "org.mozilla.focus", "org.mozilla.fenix",
-        "com.opera.browser", "com.opera.mini.native", "com.opera.gx",
-        "com.brave.browser", "com.microsoft.emmx",
-        "com.sec.android.app.sbrowser", "com.sec.android.app.sbrowser.beta",
-        "com.duckduckgo.mobile.android", "com.UCMobile.intl", "com.UCMobile.x86",
-        "com.mi.globalbrowser", "com.mi.globalbrowser.mini", "com.android.browser",
-        "com.heytap.browser", "com.coloros.browser", "com.oppo.browser",
-        "com.vivaldi.browser", "com.yandex.browser", "com.ecosia.android",
-        "com.kiwibrowser.browser", "mark.via.gp", "acr.browser.lightning",
-        "com.qwant.liberty", "org.torproject.torbrowser", "com.aloha.browser",
-    )
-
     /** True if the current foreground app is a web browser. */
-    fun isBrowserForeground(): Boolean {
-        val pkg = packageName
-        if (pkg.isEmpty()) return false
-        return pkg in BROWSERS || pkg.contains("browser")
-    }
+    fun isBrowserForeground(): Boolean = Pkgs.isBrowser(packageName)
 
     /** True if [pkg] is a web browser. */
-    fun isBrowser(pkg: String): Boolean =
-        pkg in BROWSERS || pkg.contains("browser")
+    fun isBrowser(pkg: String): Boolean = Pkgs.isBrowser(pkg)
 }

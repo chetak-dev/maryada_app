@@ -1,130 +1,121 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../data/db.dart';
 import '../../data/family_repository.dart';
+import '../../models/child.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feedback.dart';
 import '../../widgets/brand_mark.dart';
+import '../../widgets/net_guard.dart';
 
-/// Add-child flow: name the child, generate a pairing code, and show the
-/// device setup steps. Uses the real repository when [familyId] is set and
-/// Firebase is connected; otherwise generates a local demo code.
-class AddChildScreen extends StatefulWidget {
-  const AddChildScreen({super.key, this.familyId});
+/// Pairs a new device to an existing profile: name the device, generate a
+/// one-time code, enter it on the device. Reached from the profile's Devices
+/// section — the profile is already chosen.
+class PairDeviceScreen extends StatefulWidget {
+  const PairDeviceScreen({
+    super.key,
+    required this.familyId,
+    required this.child,
+  });
 
-  final String? familyId;
+  final String familyId;
+  final Child child;
 
   @override
-  State<AddChildScreen> createState() => _AddChildScreenState();
+  State<PairDeviceScreen> createState() => _PairDeviceScreenState();
 }
 
-class _AddChildScreenState extends State<AddChildScreen> {
-  final _name = TextEditingController();
+class _PairDeviceScreenState extends State<PairDeviceScreen> {
+  final _deviceName = TextEditingController();
   String? _code;
   bool _busy = false;
-  String? _childId;
-  bool _linked = false;
+  String? _nameError;
   StreamSubscription<Object?>? _linkSub;
+  Set<String> _devicesBefore = const {};
 
   @override
   void dispose() {
     _linkSub?.cancel();
-    _cleanupIfUnlinked();
-    _name.dispose();
+    _deviceName.dispose();
     super.dispose();
   }
 
-  /// If the parent leaves before the child links, remove the placeholder child
-  /// doc so it never appears in the family list (only linked children show).
-  void _cleanupIfUnlinked() {
-    final fid = widget.familyId;
-    final cid = _childId;
-    if (fid == null || cid == null || _linked) return;
-    final ref = Db.families.doc(fid).collection('children').doc(cid);
-    ref.get().then((doc) {
-      if (doc.exists && doc.data()?['paired'] != true) {
-        ref.delete();
-      }
-    }).catchError((_) {});
-  }
-
-  /// Watches the new child's doc; when the device links (paired == true) the
-  /// screen closes automatically so the dashboard shows it as protected.
-  void _watchForLink(String childId) {
-    final fid = widget.familyId;
-    if (fid == null) return;
+  /// Watches the profile's device list; a new active installation appearing
+  /// means the code was redeemed — even when the profile already had devices.
+  void _watchForLink() {
     _linkSub?.cancel();
-    _linkSub = Db.families
-        .doc(fid)
-        .collection('children')
-        .doc(childId)
+    _linkSub = Db.children(widget.familyId)
+        .doc(widget.child.id)
+        .collection('devices')
         .snapshots()
         .listen((snap) {
-      final data = snap.data();
-      if (data != null && data['paired'] == true) {
-        _linked = true;
-        _linkSub?.cancel();
-        if (!mounted) return;
-        final name = _name.text.trim();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text(
-                  '${name.isEmpty ? 'Device' : name} is linked and protected.')),
-        );
-        Navigator.of(context).pop();
-      }
+      final active = snap.docs
+          .where((d) => d.data()['revoked'] != true)
+          .map((d) => d.id)
+          .toSet();
+      if (active.difference(_devicesBefore).isEmpty) return;
+      _linkSub?.cancel();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text(
+                '${widget.child.name}’s device is linked and protected.')),
+      );
+      Navigator.of(context).pop();
     });
   }
 
   Future<void> _generate() async {
-    if (_name.text.trim().isEmpty) {
+    final deviceName = _deviceName.text.trim();
+    if (deviceName.isEmpty) {
+      setState(() => _nameError = 'Give the device a name first.');
+      return;
+    }
+    setState(() => _nameError = null);
+    if (!await Net.require(context)) return;
+    if (!mounted) return;
+    setState(() => _busy = true);
+    try {
+      // Snapshot the active devices first, so the link detector only fires on
+      // an installation that appears after this code was issued.
+      final before = await Db.children(widget.familyId)
+          .doc(widget.child.id)
+          .collection('devices')
+          .get();
+      _devicesBefore = before.docs
+          .where((d) => d.data()['revoked'] != true)
+          .map((d) => d.id)
+          .toSet();
+      final code = await FamilyRepository.instance.generatePairingCode(
+          familyId: widget.familyId,
+          childId: widget.child.id,
+          deviceName: deviceName);
+      if (!mounted) return;
+      setState(() {
+        _code = code;
+        _busy = false;
+      });
+      _watchForLink();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _busy = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter the child’s name first.')),
+        SnackBar(
+            content:
+                Text('Couldn’t create a pairing code — ${friendlyError(e)}')),
       );
-      return;
     }
-    final live = widget.familyId != null && Db.ready;
-    if (live) {
-      setState(() => _busy = true);
-      try {
-        final repo = FamilyRepository.instance;
-        final child = await repo.addChild(
-            familyId: widget.familyId!, name: _name.text.trim());
-        final code = await repo.generatePairingCode(
-            familyId: widget.familyId!, childId: child.id);
-        if (!mounted) return;
-        setState(() {
-          _code = code;
-          _busy = false;
-        });
-        _childId = child.id;
-        _watchForLink(child.id);
-      } catch (e) {
-        if (!mounted) return;
-        setState(() => _busy = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Couldn’t create pairing code: $e')),
-        );
-      }
-      return;
-    }
-    // Demo mode: local one-time code.
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final r = Random.secure();
-    setState(() {
-      _code =
-          List.generate(6, (_) => chars[r.nextInt(chars.length)]).join();
-    });
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final name = widget.child.name;
     return Scaffold(
-      appBar: AppBar(title: const Text('Add a child')),
+      appBar: AppBar(title: Text('Add a device · $name')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
@@ -132,14 +123,15 @@ class _AddChildScreenState extends State<AddChildScreen> {
           Center(child: const BrandMark(size: 64)),
           const SizedBox(height: AppSpacing.md),
           Text(
-            _code == null ? 'Name this child' : 'Pair the device',
+            _code == null ? 'Name the device' : 'Pair the device',
             textAlign: TextAlign.center,
             style: theme.textTheme.headlineMedium,
           ),
           const SizedBox(height: AppSpacing.sm),
           Text(
             _code == null
-                ? 'We’ll create a one-time code to link their device.'
+                ? 'A profile can hold several devices — a phone, a tablet, '
+                    'a laptop. Name this one so you can tell them apart.'
                 : 'Enter this code on the child’s device during setup.',
             textAlign: TextAlign.center,
             style: theme.textTheme.bodyMedium,
@@ -153,13 +145,21 @@ class _AddChildScreenState extends State<AddChildScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     TextField(
-                      controller: _name,
+                      controller: _deviceName,
                       textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(
-                        labelText: 'Child’s name',
-                        hintText: 'e.g. Aarav',
-                        prefixIcon: Icon(Icons.person_outline),
+                      textInputAction: TextInputAction.done,
+                      decoration: InputDecoration(
+                        labelText: 'Device name',
+                        hintText: 'e.g. $name’s phone / tablet / laptop',
+                        prefixIcon: const Icon(Icons.devices_other_rounded),
+                        errorText: _nameError,
                       ),
+                      onChanged: (_) {
+                        if (_nameError != null) {
+                          setState(() => _nameError = null);
+                        }
+                      },
+                      onSubmitted: (_) => _busy ? null : _generate(),
                     ),
                     const SizedBox(height: AppSpacing.md),
                     FilledButton.icon(
@@ -294,16 +294,15 @@ class _Step extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return IntrinsicHeight(
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Column(
             children: [
               Container(
-                width: 30,
-                height: 30,
+                width: 28,
+                height: 28,
                 alignment: Alignment.center,
                 decoration: const BoxDecoration(
                   color: AppColors.primaryLight,
@@ -319,21 +318,25 @@ class _Step extends StatelessWidget {
               ),
               if (!last)
                 Expanded(
-                  child: Container(width: 2, color: AppColors.border),
+                  child:
+                      Container(width: 2, color: AppColors.borderOf(context)),
                 ),
             ],
           ),
           const SizedBox(width: AppSpacing.md),
           Expanded(
             child: Padding(
-              padding: EdgeInsets.only(bottom: last ? 0 : AppSpacing.md),
+              padding: const EdgeInsets.only(bottom: AppSpacing.md),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(title,
-                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
                   const SizedBox(height: 2),
-                  Text(body, style: theme.textTheme.bodyMedium),
+                  Text(body,
+                      style: TextStyle(
+                          color: AppColors.textSecondaryOf(context),
+                          fontSize: 13)),
                 ],
               ),
             ),

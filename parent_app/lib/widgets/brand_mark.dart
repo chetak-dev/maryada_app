@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// The GuardNest brand mark: a rounded, gradient shield badge. Reusable across
-/// the login, splash and app bar. Size controls the whole badge.
+/// The Maryada mark. Reusable across the login, splash and app bar; [size]
+/// controls the whole mark.
 class BrandMark extends StatelessWidget {
   const BrandMark({super.key, this.size = 64, this.showGlow = true});
 
@@ -15,29 +15,25 @@ class BrandMark extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        gradient: AppColors.brandGradient,
-        borderRadius: BorderRadius.circular(size * 0.32),
-        boxShadow: showGlow
-            ? [
+      decoration: showGlow
+          ? BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
                 BoxShadow(
-                  color: AppColors.primary.withValues(alpha: 0.35),
-                  blurRadius: size * 0.4,
-                  offset: Offset(0, size * 0.12),
+                  color: AppColors.primary.withValues(alpha: 0.28),
+                  blurRadius: size * 0.35,
+                  offset: Offset(0, size * 0.10),
                 ),
-              ]
-            : null,
-      ),
-      child: Icon(
-        Icons.shield_rounded,
-        color: Colors.white,
-        size: size * 0.56,
-      ),
+              ],
+            )
+          : null,
+      child: Image.asset('assets/logo.png',
+          width: size, height: size, semanticLabel: 'Maryada'),
     );
   }
 }
 
-/// Brand wordmark "GuardNest" with the shield badge — used on auth screens.
+/// Brand wordmark "Maryada" with the shield badge — used on auth screens.
 class BrandLockup extends StatelessWidget {
   const BrandLockup({super.key, this.markSize = 40});
 
@@ -62,52 +58,40 @@ class BrandLockup extends StatelessWidget {
   }
 }
 
-/// Full-screen branded loading view. Matches the HTML boot splash in
-/// `web/index.html` so the app's initial loading looks like a single, seamless
-/// loader instead of two different spinners.
+/// Full-screen branded loading view.
 class BrandLoader extends StatelessWidget {
   const BrandLoader({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // A plain surface, not the brand gradient: the mark is a dark shield and it
+    // sank into the purple.
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(gradient: AppColors.brandGradient),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 68,
-                height: 68,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.16),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: const Icon(Icons.shield_rounded,
-                    color: Colors.white, size: 34),
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const BrandMark(size: 132, showGlow: false),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              'Maryada',
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                letterSpacing: -0.5,
               ),
-              const SizedBox(height: AppSpacing.md),
-              const Text(
-                'Maryada',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.5,
-                ),
+            ),
+            const SizedBox(height: AppSpacing.xl),
+            SizedBox(
+              width: 132,
+              child: LinearProgressIndicator(
+                minHeight: 3,
+                color: AppColors.primary,
+                backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(3),
               ),
-              const SizedBox(height: AppSpacing.lg),
-              const SizedBox(
-                width: 34,
-                height: 34,
-                child: CircularProgressIndicator(
-                  strokeWidth: 3,
-                  color: Colors.white,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

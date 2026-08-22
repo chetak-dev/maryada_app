@@ -21,6 +21,13 @@ object ScreenGuard {
     /** "paused" / "resting (bedtime)" — for the on-screen message. */
     @Volatile var label = "paused"
 
+    /** Title + message for the lock screen shown when the child opens an app
+     *  during pause/bedtime. Set by [EnforcementService] so both the enforcement
+     *  loop and the accessibility service show the same text (with the real
+     *  bedtime schedule). */
+    @Volatile var lockTitle = "Paused"
+    @Volatile var lockSubtitle = "Your device is paused by your parent."
+
     /** True if [now] (minutes from midnight) is within [start, end), handling
      *  overnight windows like 21:00 -> 07:00. */
     fun isWithinWindow(now: Int, start: Int, end: Int): Boolean {

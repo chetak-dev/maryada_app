@@ -3,16 +3,24 @@ import 'package:flutter/material.dart';
 import '../../data/db.dart';
 import '../../data/web_history_repository.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/empty_state.dart';
 
-/// Activity & reports: a weekly screen-time bar chart and today's most-used
-/// apps. Uses real reported usage when [familyId]/[childId] are set and the
-/// child has granted usage access; otherwise shows sample data.
+/// What a child did on the web, newest first.
 class ActivityScreen extends StatefulWidget {
-  const ActivityScreen({super.key, this.childName, this.familyId, this.childId});
+  const ActivityScreen({
+    super.key,
+    this.childName,
+    this.familyId,
+    this.childId,
+    this.deviceId,
+  });
 
   final String? childName;
   final String? familyId;
   final String? childId;
+
+  /// When set, only this device's records are shown.
+  final String? deviceId;
 
   @override
   State<ActivityScreen> createState() => _ActivityScreenState();
@@ -25,212 +33,721 @@ class _ActivityScreenState extends State<ActivityScreen> {
   @override
   Widget build(BuildContext context) {
     final title = widget.childName == null
-        ? 'Website Visits'
-        : 'Website Visits · ${widget.childName}';
+        ? 'Web activity'
+        : 'Web activity · ${widget.childName}';
 
     return Scaffold(
       appBar: AppBar(title: Text(title)),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
-        children: [
-          if (_live)
-            _WebHistorySection(
-                familyId: widget.familyId!, childId: widget.childId!),
-        ],
-      ),
+      body: !_live
+          ? const EmptyState(
+              icon: Icons.phonelink_off_rounded,
+              title: 'No device connected',
+              message: 'Pair a device to start seeing web activity here.',
+            )
+          : _WebActivityView(
+              familyId: widget.familyId!,
+              childId: widget.childId!,
+              deviceId: widget.deviceId),
     );
   }
 }
 
-class _WebHistorySection extends StatefulWidget {
-  const _WebHistorySection({required this.familyId, required this.childId});
-  final String familyId;
-  final String childId;
+/// One row of the timeline. Searches, visits and blocks are different kinds of
+/// the same event, so they share a shape and sort together.
+class _Entry {
+  const _Entry({
+    required this.kind,
+    required this.title,
+    required this.subtitle,
+    required this.at,
+    this.tag = '',
+  });
 
-  @override
-  State<_WebHistorySection> createState() => _WebHistorySectionState();
+  final _Kind kind;
+  final String title;
+  final String subtitle;
+  final DateTime? at;
+
+  /// Why a site was blocked, already in parent-facing words.
+  final String tag;
 }
 
-class _WebHistorySectionState extends State<_WebHistorySection> {
-  int _period = 0; // 0 = Today, 1 = Last week, 2 = This month
+enum _Kind { search, site, blocked }
+
+enum _Filter { all, searches, sites, blocked }
+
+extension on _Filter {
+  bool accepts(_Kind kind) => switch (this) {
+        _Filter.all => true,
+        _Filter.searches => kind == _Kind.search,
+        _Filter.sites => kind == _Kind.site,
+        _Filter.blocked => kind == _Kind.blocked,
+      };
+}
+
+String _clock(DateTime? t) {
+  if (t == null) return '';
+  final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
+  return '$h:${t.minute.toString().padLeft(2, '0')} ${t.hour < 12 ? 'am' : 'pm'}';
+}
+
+String _short(Duration d) {
+  if (d.inMilliseconds > 0 && d.inSeconds == 0) return '<1s';
+  if (d.inSeconds < 60) return '${d.inSeconds}s';
+  if (d.inMinutes < 60) return '${d.inMinutes}m';
+  final h = d.inHours;
+  final m = d.inMinutes % 60;
+  return m == 0 ? '${h}h' : '${h}h ${m}m';
+}
+
+/// The tags shown against a block. Anything else — the parent's own list, or a
+/// device on an older build — is "Others".
+const _reasonLabels = <String, String>{
+  'adult': 'Porn',
+  'gambling': 'Gambling',
+  'drugs': 'Drugs',
+  'social': 'Social media',
+  'malware': 'Malware',
+  'phishing': 'Phishing',
+  'weapons': 'Weapons',
+  'violence': 'Violence',
+  'youtube': 'YouTube',
+  'content': 'Unsafe content',
+  'keyword': 'Blocked word',
+  'blocklist': 'Your block list',
+};
+
+class _WebActivityView extends StatefulWidget {
+  const _WebActivityView({
+    required this.familyId,
+    required this.childId,
+    this.deviceId,
+  });
+  final String familyId;
+  final String childId;
+  final String? deviceId;
+
+  @override
+  State<_WebActivityView> createState() => _WebActivityViewState();
+}
+
+class _WebActivityViewState extends State<_WebActivityView> {
+  _Filter _filter = _Filter.all;
+  int _days = 1;
+
+  // Built once: re-creating it inside build() re-subscribes on every setState,
+  // which flashes the loading spinner each time a filter is tapped.
+  late final Stream<WebHistory> _stream = WebHistoryRepository.instance
+      .watch(widget.familyId, widget.childId, deviceId: widget.deviceId);
+
+  bool _inPeriod(DateTime? at) {
+    if (at == null) return false;
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: _days - 1));
+    return !at.isBefore(start);
+  }
+
+  // Building and sorting the timeline is the expensive part, and it doesn't
+  // depend on the filter — doing it inside build() made every filter tap
+  // re-sort the whole history before the tile could highlight.
+  WebHistory? _cachedFor;
+  int? _cachedDays;
+  late List<_Entry> _allEntries;
+  late Duration _totalTime;
+  late int _searchCount;
+  late int _siteCount;
+  late int _blockCount;
+
+  void _rebuild(WebHistory history) {
+    if (identical(_cachedFor, history) && _cachedDays == _days) return;
+    _cachedFor = history;
+    _cachedDays = _days;
+
+    // Searches typed into the YouTube app belong to the YouTube screen; this
+    // one is about the browser.
+    final searches = history.searches
+        .where((s) => s.engine.toLowerCase() != 'youtube')
+        .where((s) => _inPeriod(s.at))
+        .toList();
+    final visited = history.visited.where((v) => _inPeriod(v.at)).toList();
+    final blocked = history.blocked.where((b) => _inPeriod(b.at)).toList();
+
+    _searchCount = searches.length;
+    _siteCount = visited.length;
+    _blockCount = blocked.fold<int>(0, (sum, b) => sum + b.count);
+    _totalTime =
+        visited.fold(Duration.zero, (sum, v) => sum + v.timeSpent);
+
+    _allEntries = <_Entry>[
+      for (final s in searches)
+        _Entry(
+          kind: _Kind.search,
+          title: s.query,
+          subtitle: s.engine,
+          at: s.at,
+        ),
+      for (final v in visited)
+        _Entry(
+          kind: _Kind.site,
+          title: v.domain,
+          subtitle: [
+            if (v.timeSpent.inMilliseconds > 0) _short(v.timeSpent),
+            if (v.count > 1) '${v.count} visits',
+          ].join('  ·  '),
+          at: v.at,
+        ),
+      for (final b in blocked)
+        _Entry(
+          kind: _Kind.blocked,
+          title: b.domain,
+          subtitle: b.count == 1 ? 'Blocked' : 'Blocked ${b.count} times',
+          at: b.at,
+          tag: _reasonLabels[b.reason] ?? 'Others',
+        ),
+    ]..sort((a, b) => (b.at?.millisecondsSinceEpoch ?? 0)
+        .compareTo(a.at?.millisecondsSinceEpoch ?? 0));
+  }
 
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<WebHistory>(
-      stream: WebHistoryRepository.instance
-          .watch(widget.familyId, widget.childId),
+      stream: _stream,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Padding(
-            padding: EdgeInsets.only(top: AppSpacing.xxl),
-            child: Center(child: CircularProgressIndicator()),
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snap.hasError) {
+          return const EmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Couldn’t load activity',
+            message: 'Check your connection and try again.',
           );
         }
-        final history = snap.data ?? const WebHistory();
-        final now = DateTime.now();
-        final startOfToday = DateTime(now.year, now.month, now.day);
-        final weekAgo = now.subtract(const Duration(days: 7));
-        bool isToday(WebVisit v) => v.at != null && !v.at!.isBefore(startOfToday);
-        bool isLastWeek(WebVisit v) =>
-            v.at != null && v.at!.isBefore(startOfToday) && v.at!.isAfter(weekAgo);
-        final visitedToday = history.visited.where(isToday).toList();
-        final visitedWeek = history.visited.where(isLastWeek).toList();
-        final visitedMonth = history.visited
-            .where((v) => !isToday(v) && !isLastWeek(v))
-            .toList();
-        final selected =
-            [visitedToday, visitedWeek, visitedMonth][_period];
-        final emptyText =
-            ['None today.', 'None this week.', 'None earlier.'][_period];
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+
+        _rebuild(snap.data ?? const WebHistory());
+        final entries =
+            _allEntries.where((e) => _filter.accepts(e.kind)).toList();
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
           children: [
-            Text('Websites visited',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: AppSpacing.sm),
-            _PeriodSelector(
-              selected: _period,
-              onChanged: (i) => setState(() => _period = i),
-            ),
-            const SizedBox(height: AppSpacing.sm),
-            _DomainCard(
-              domains: selected,
-              emptyText: emptyText,
-              blocked: false,
+            _SummaryCard(
+              total: _totalTime,
+              days: _days,
+              onDays: (d) => setState(() => _days = d),
+              searches: _searchCount,
+              sites: _siteCount,
+              blocked: _blockCount,
+              filter: _filter,
+              // Tapping the active stat clears it, so "all" needs no chip.
+              onFilter: (f) => setState(
+                  () => _filter = _filter == f ? _Filter.all : f),
             ),
             const SizedBox(height: AppSpacing.lg),
-            Text('Blocked websites',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: AppSpacing.sm),
-            _DomainCard(
-              domains: history.blocked,
-              emptyText: 'No blocked sites yet.',
-              blocked: true,
-            ),
+            if (entries.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: AppSpacing.xl),
+                child: EmptyState(
+                  icon: Icons.travel_explore_rounded,
+                  title: 'Nothing yet',
+                  message: 'Web activity for this period will appear here.',
+                ),
+              )
+            else
+              ..._buildDays(entries),
           ],
         );
       },
     );
   }
+
+  List<Widget> _buildDays(List<_Entry> entries) {
+    final out = <Widget>[];
+    var i = 0;
+    while (i < entries.length) {
+      final day = entries[i].at!;
+      final group = <_Entry>[];
+      while (i < entries.length && _sameDay(entries[i].at!, day)) {
+        group.add(entries[i]);
+        i++;
+      }
+      out
+        ..add(_DayHeader(day: day, count: group.length))
+        ..add(const SizedBox(height: AppSpacing.sm))
+        ..add(_DayCard(entries: group))
+        ..add(const SizedBox(height: AppSpacing.lg));
+    }
+    return out;
+  }
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
 }
 
-class _PeriodSelector extends StatelessWidget {
-  const _PeriodSelector({required this.selected, required this.onChanged});
-  final int selected;
-  final ValueChanged<int> onChanged;
+/// The period's headline: how long the child browsed, and a breakdown that
+/// doubles as the filter.
+class _SummaryCard extends StatelessWidget {
+  const _SummaryCard({
+    required this.total,
+    required this.days,
+    required this.onDays,
+    required this.searches,
+    required this.sites,
+    required this.blocked,
+    required this.filter,
+    required this.onFilter,
+  });
+
+  final Duration total;
+  final int days;
+  final ValueChanged<int> onDays;
+  final int searches;
+  final int sites;
+  final int blocked;
+  final _Filter filter;
+  final ValueChanged<_Filter> onFilter;
+
+  static String _periodLabel(int d) => switch (d) {
+        1 => 'Today',
+        7 => 'Last 7 days',
+        _ => 'Last 30 days',
+      };
+
+  String get _headline {
+    if (total.inSeconds < 1) return '—';
+    final h = total.inHours;
+    final m = total.inMinutes % 60;
+    if (h > 0) return m == 0 ? '${h}h' : '${h}h ${m}m';
+    if (m > 0) return '${m}m';
+    return '${total.inSeconds}s';
+  }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: SegmentedButton<int>(
-        segments: const [
-          ButtonSegment(value: 0, label: Text('Today')),
-          ButtonSegment(value: 1, label: Text('Last week')),
-          ButtonSegment(value: 2, label: Text('This month')),
-        ],
-        selected: {selected},
-        showSelectedIcon: false,
-        style: ButtonStyle(
-          visualDensity: VisualDensity.compact,
-          textStyle: WidgetStatePropertyAll(
-            Theme.of(context).textTheme.bodySmall,
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.lg),
+      decoration: BoxDecoration(
+        gradient: AppColors.brandGradient,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadow.raised,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Time on the web',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+              PopupMenuButton<int>(
+                initialValue: days,
+                onSelected: onDays,
+                position: PopupMenuPosition.under,
+                itemBuilder: (_) => [
+                  for (final d in [1, 7, 30])
+                    PopupMenuItem(value: d, child: Text(_periodLabel(d))),
+                ],
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm + 2, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(AppRadius.pill),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _periodLabel(days),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      const Icon(Icons.expand_more_rounded,
+                          size: 16, color: Colors.white),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ),
-        onSelectionChanged: (s) => onChanged(s.first),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            _headline,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 38,
+              fontWeight: FontWeight.w700,
+              height: 1.1,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Container(height: 1, color: Colors.white.withValues(alpha: 0.18)),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              _Stat(
+                value: searches,
+                label: 'Searches',
+                icon: Icons.search_rounded,
+                active: filter == _Filter.searches,
+                onTap: () => onFilter(_Filter.searches),
+              ),
+              _Stat(
+                value: sites,
+                label: 'Sites',
+                icon: Icons.language_rounded,
+                active: filter == _Filter.sites,
+                onTap: () => onFilter(_Filter.sites),
+              ),
+              _Stat(
+                value: blocked,
+                label: 'Blocked',
+                icon: Icons.shield_rounded,
+                active: filter == _Filter.blocked,
+                onTap: () => onFilter(_Filter.blocked),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 }
 
-class _DomainCard extends StatelessWidget {
-  const _DomainCard({
-    required this.domains,
-    required this.emptyText,
-    required this.blocked,
+class _Stat extends StatelessWidget {
+  const _Stat({
+    required this.value,
+    required this.label,
+    required this.icon,
+    required this.active,
+    required this.onTap,
   });
-  final List<WebVisit> domains;
-  final String emptyText;
-  final bool blocked;
 
-  static String _when(DateTime? t) {
-    if (t == null) return '';
-    final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
-    final ampm = t.hour < 12 ? 'AM' : 'PM';
-    return '$h:${t.minute.toString().padLeft(2, '0')} $ampm';
+  final int value;
+  final String label;
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      // Highlight on finger-down: InkWell's onTap only fires on release, which
+      // read as the tile lagging behind the tap.
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => onTap(),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 90),
+          padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+          decoration: BoxDecoration(
+            color: active
+                ? Colors.white.withValues(alpha: 0.20)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 15, color: Colors.white.withValues(alpha: 0.75)),
+              const SizedBox(width: 5),
+              Text(
+                '$value',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.75),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
+}
 
-  static String _spent(Duration d) {
-    if (d.inSeconds < 60) return '${d.inSeconds}s';
-    if (d.inMinutes < 60) return '${d.inMinutes}m';
-    final h = d.inHours;
-    final m = d.inMinutes % 60;
-    return m == 0 ? '${h}h' : '${h}h ${m}m';
-  }
+class _DayHeader extends StatelessWidget {
+  const _DayHeader({required this.day, required this.count});
+  final DateTime day;
+  final int count;
 
-  String? _subtitle(WebVisit v) {
-    if (blocked) {
-      if (v.count <= 0) return null;
-      return v.count == 1 ? '1 attempt' : '${v.count} attempts';
-    }
-    final parts = <String>[];
-    if (v.timeSpent.inSeconds > 0) parts.add('${_spent(v.timeSpent)} spent');
-    if (v.count > 1) parts.add('${v.count} visits');
-    return parts.isEmpty ? null : parts.join('  ·  ');
+  String get _label {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final diff = today.difference(DateTime(day.year, day.month, day.day)).inDays;
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${day.day} ${months[day.month - 1]}';
   }
 
   @override
   Widget build(BuildContext context) {
-    if (domains.isEmpty) {
-      return Card(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Text(emptyText,
-              style: const TextStyle(color: AppColors.textMuted)),
-        ),
-      );
-    }
-    final color = blocked ? AppColors.danger : AppColors.primary;
-    return Card(
+    return Padding(
+      padding: const EdgeInsets.only(left: AppSpacing.xs),
+      child: Row(
+        children: [
+          Text(
+            _label.toUpperCase(),
+            style: TextStyle(
+              color: AppColors.textSecondaryOf(context),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+              child: Container(height: 1, color: AppColors.borderOf(context))),
+          const SizedBox(width: AppSpacing.sm),
+          Text(
+            '$count',
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DayCard extends StatelessWidget {
+  const _DayCard({required this.entries});
+  final List<_Entry> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        boxShadow: AppShadow.card,
+      ),
       child: Column(
         children: [
-          for (var i = 0; i < domains.length; i++) ...[
-            if (i > 0) const Divider(height: 1, indent: 56),
-            ListTile(
-              contentPadding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-              leading: Container(
-                width: 36,
-                height: 36,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                ),
-                child: Icon(
-                  blocked ? Icons.public_off_rounded : Icons.public_rounded,
-                  color: color,
-                  size: 20,
-                ),
+          for (var i = 0; i < entries.length; i++) ...[
+            if (i > 0)
+              Padding(
+                padding:
+                    const EdgeInsets.only(left: 68, right: AppSpacing.md),
+                child: Divider(
+                    height: 1,
+                    thickness: 1,
+                    color: AppColors.borderOf(context)),
               ),
-              title: Text(domains[i].domain,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w600, fontSize: 14)),
-              subtitle: _subtitle(domains[i]) == null
-                  ? null
-                  : Text(_subtitle(domains[i])!,
-                      style: const TextStyle(
-                          color: AppColors.textMuted, fontSize: 12)),
-              trailing: Text(_when(domains[i].at),
-                  style: const TextStyle(
-                      color: AppColors.textMuted, fontSize: 12)),
-            ),
+            _Row(entry: entries[i]),
           ],
         ],
       ),
     );
   }
 }
+
+class _Row extends StatelessWidget {
+  const _Row({required this.entry});
+  final _Entry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final blocked = entry.kind == _Kind.blocked;
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md, vertical: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _Badge(entry: entry),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimaryOf(context),
+                    height: 1.25,
+                  ),
+                ),
+                if (entry.subtitle.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (entry.tag.isNotEmpty) _Tag(label: entry.tag),
+                      Text(
+                        entry.subtitle,
+                        style: TextStyle(
+                          color: blocked
+                              ? AppColors.danger
+                              : AppColors.textSecondaryOf(context),
+                          fontSize: 12.5,
+                          fontWeight:
+                              blocked ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Text(
+            _clock(entry.at),
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The category that triggered the block, so a parent sees *why* at a glance.
+class _Tag extends StatelessWidget {
+  const _Tag({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.danger.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+        border: Border.all(color: AppColors.danger.withValues(alpha: 0.25)),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(
+          color: AppColors.danger,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+        ),
+      ),
+    );
+  }
+}
+
+/// Sites get a lettered tile keyed to the domain, so a parent recognises a
+/// repeat visit at a glance instead of scanning identical globe icons.
+class _Badge extends StatelessWidget {  const _Badge({required this.entry});
+  final _Entry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    if (entry.kind == _Kind.search) {
+      return Container(
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.info.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(AppRadius.md),
+        ),
+        child: const Icon(Icons.search_rounded,
+            color: AppColors.info, size: 20),
+      );
+    }
+
+    final domain = entry.title.replaceFirst(RegExp(r'^www\.'), '');
+    final letter =
+        domain.isEmpty ? '?' : domain.substring(0, 1).toUpperCase();
+    final tint = AppColors.avatarFor(domain);
+    final isBlocked = entry.kind == _Kind.blocked;
+
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: (isBlocked ? AppColors.textMuted : tint)
+                  .withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(AppRadius.md),
+            ),
+            child: Text(
+              letter,
+              style: TextStyle(
+                color: isBlocked ? AppColors.textSecondaryOf(context) : tint,
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          if (isBlocked)
+            Positioned(
+              right: -3,
+              bottom: -3,
+              child: Container(
+                width: 18,
+                height: 18,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: AppColors.danger,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                      color: AppColors.surfaceOf(context), width: 2),
+                ),
+                child: const Icon(Icons.close_rounded,
+                    size: 10, color: Colors.white),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+

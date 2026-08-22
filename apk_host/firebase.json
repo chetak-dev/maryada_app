@@ -1,0 +1,7 @@
+{
+  "hosting": {
+    "site": "guardnest-1ec2c",
+    "public": "public",
+    "ignore": ["firebase.json", "**/.*"]
+  }
+}

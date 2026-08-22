@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../data/app_update_repository.dart';
 import '../../data/db.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feedback.dart';
 
 /// Lets a parent publish an app update: set the newest version code + APK URL
 /// that the child devices poll and install silently (Device Owner). Edits the
@@ -92,7 +93,7 @@ class _PublishUpdateScreenState extends State<PublishUpdateScreen> {
       if (!mounted) return;
       setState(() => _saving = false);
       messenger.showSnackBar(
-        SnackBar(content: Text('Couldn\u2019t publish: $e')),
+        SnackBar(content: Text('Couldn’t publish — ${friendlyError(e)}')),
       );
     }
   }
@@ -110,14 +111,15 @@ class _PublishUpdateScreenState extends State<PublishUpdateScreen> {
               children: [
                 Card(
                   color: AppColors.primary.withValues(alpha: 0.06),
-                  child: const Padding(
-                    padding: EdgeInsets.all(AppSpacing.md),
+                  child: Padding(
+                    padding: const EdgeInsets.all(AppSpacing.md),
                     child: Text(
-                      'Push a new build to all child devices. Upload the '
-                      'release-signed APK to Firebase Storage, paste its https '
-                      'download URL below, and set the version code to match the '
-                      'new build. Device-Owner devices install it silently.',
-                      style: TextStyle(color: AppColors.textPrimary),
+                      'Push a new build to all child devices. Host the '
+                      'release-signed APK at an https URL, paste it below, and '
+                      'set the version code to match the new build. '
+                      'Device-Owner devices install it silently.',
+                      style:
+                          TextStyle(color: AppColors.textPrimaryOf(context)),
                     ),
                   ),
                 ),

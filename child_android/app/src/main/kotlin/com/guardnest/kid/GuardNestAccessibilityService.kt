@@ -17,6 +17,8 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import java.util.Calendar
+import java.util.Locale
 
 /**
  * Lets the app UI ask the running accessibility service to turn itself off —
@@ -66,11 +68,17 @@ class GuardNestAccessibilityService : AccessibilityService() {
     private var lastTamperToast = 0L
     private var lastPairingVerify = 0L
     private var lastLockToast = 0L
-    private var lastBlockToast = 0L
+    private var lastBlockPageAt = 0L
     private var lastBrowserToast = 0L
-    private var lastPauseToast = 0L
     private var lastShot = 0L
     @Volatile private var shotInFlight = false
+    // Coalesces the per-event browser guards; a loading page fires content
+    // changes far faster than the tree is worth re-reading.
+    private var lastBrowserGuard = 0L
+    private var lastChatCapture = 0L
+    private var lastYtCapture = 0L
+    // The address-bar view id that actually worked for a given browser.
+    private val urlBarIdCache = mutableMapOf<String, String>()
     // YouTube watch-time tracking (current video + last capture time).
     private var lastYtTitle: String? = null
     private var lastYtChannel: String? = null
@@ -92,11 +100,40 @@ class GuardNestAccessibilityService : AccessibilityService() {
     // Continuous browser guard so blocked sites are caught near-instantly.
     private val browserGuard = object : Runnable {
         override fun run() {
+            var browsing = false
             try {
-                guardBrowserNow()
+                browsing = guardBrowserNow()
             } catch (_: Throwable) {
             } finally {
-                ytHandler.postDelayed(this, BROWSER_GUARD_MS)
+                // Only poll fast while a browser is actually open; otherwise
+                // this loop was reading the whole window list several times a
+                // second all day for nothing.
+                ytHandler.postDelayed(
+                    this,
+                    if (browsing) BROWSER_GUARD_MS else BROWSER_IDLE_MS,
+                )
+            }
+        }
+    }
+    // Periodic browser OCR guard: screenshots the browser and reads the words
+    // rendered on the page (text the accessibility tree doesn't expose), then
+    // blocks the page on any unsafe word.
+    @Volatile private var imgShotInFlight = false
+    private var lastImgShot = 0L
+    // aHash of the last scanned browser frame; identical frames skip the OCR
+    // pass so a static page costs almost no battery.
+    private var lastFrameSig = 0L
+    private val imageGuard = object : Runnable {
+        override fun run() {
+            var browsing = false
+            try {
+                browsing = guardBrowserImageNow()
+            } catch (_: Throwable) {
+            } finally {
+                ytHandler.postDelayed(
+                    this,
+                    if (browsing) IMAGE_GUARD_MS else BROWSER_IDLE_MS,
+                )
             }
         }
     }
@@ -116,22 +153,19 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (guardAppManagementScreens(pkg, type)) return
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            ForegroundApp.set(pkg)
+            // The lock overlay is a focusable window, so raising it fires this
+            // event under our own package. Recording that as the foreground app
+            // made the enforcement poller read it as "the child left the app",
+            // hide the overlay, and flash it straight back — the flicker the
+            // child saw on every blocked app.
+            if (pkg != packageName || !LockOverlay.isShowing()) ForegroundApp.set(pkg)
             // Pause / bedtime: block every app except emergency calls & home.
             if (guardScreenTimeLock(pkg)) return
             // If a required protection was turned off, only let the child use the
             // apps needed to fix it — everything else is bounced to GuardNest.
             if (guardPermissionLockdown(pkg)) return
             if (pkg != packageName && BlockedApps.isBlocked(pkg)) {
-                // Kick the child out of the blocked app.
-                performGlobalAction(GLOBAL_ACTION_HOME)
-                val now = System.currentTimeMillis()
-                if (now - lastToast > 2000) {
-                    lastToast = now
-                    Toast.makeText(
-                        this, "This app is blocked by your parent.", Toast.LENGTH_SHORT
-                    ).show()
-                }
+                blockApp(pkg)
                 return
             }
             // Only one browser allowed: bounce out of any other browser, so no
@@ -156,25 +190,47 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
 
         // For a browser, read the address bar and record the visited site.
+        // A loading or scrolling web page fires content-changed events
+        // continuously, and each pass here walks every window's node tree — left
+        // unthrottled it made browsing crawl. Blocking still lands well inside a
+        // second, and the 250ms imageGuard/OCR pass is unaffected.
         if (pkg != packageName && ForegroundApp.isBrowserForeground()) {
-            if (guardIncognito()) return
-            // Enforce first (URL across all windows + page-text keyword scan) so
-            // a bad site is blocked on load, not only after a refresh.
-            guardBrowserNow()
-            captureBrowserUrl(pkg)
+            val now = System.currentTimeMillis()
+            if (now - lastBrowserGuard >= BROWSER_GUARD_MS) {
+                lastBrowserGuard = now
+                if (guardIncognito()) return
+                // Enforce first (URL across all windows + page-text keyword scan) so
+                // a bad site is blocked on load, not only after a refresh.
+                guardBrowserNow()
+                captureBrowserUrl(pkg)
+            }
         }
 
         // For a messaging app (WhatsApp only), read the visible on-screen chat text.
         if (pkg != packageName && CHAT_SCRAPE.containsKey(pkg)) {
-            captureChatText(pkg)
+            val now = System.currentTimeMillis()
+            // Scan faster during a scroll so the fading floating date pill is
+            // read before it disappears; otherwise keep the calmer cadence.
+            val throttle =
+                if (type == AccessibilityEvent.TYPE_VIEW_SCROLLED) CHAT_SCROLL_THROTTLE_MS
+                else CAPTURE_THROTTLE_MS
+            if (now - lastChatCapture >= throttle) {
+                lastChatCapture = now
+                captureChatText(pkg)
+            }
             // Note: OCR screenshot capture is intentionally NOT used for chats —
             // it can't tell a message's side or time, which mangled the display.
         }
 
         // In the YouTube app (official, Vanced or ReVanced), record the video
-        // the child is watching.
-        if (pkg in YOUTUBE_PKGS) {
-            captureYoutube(pkg)
+        // the child is watching. Scrolling the feed fires events far faster than
+        // the title can change, so the tree scan is coalesced.
+        if (Pkgs.isYoutube(pkg)) {
+            val now = System.currentTimeMillis()
+            if (now - lastYtCapture >= CAPTURE_THROTTLE_MS) {
+                lastYtCapture = now
+                captureYoutube(pkg)
+            }
         }
     }
 
@@ -189,12 +245,73 @@ class GuardNestAccessibilityService : AccessibilityService() {
             rootInActiveWindow
         } catch (_: Exception) {
             null
-        } ?: return
+        }
+        // Search capture is independent of watch-time tracking, so it runs even
+        // while the MediaSession source owns the watch history.
+        if (root != null) captureYoutubeSearch(pkg, root)
+        // When the notification-listener MediaSession source is covering YouTube
+        // (it works full-screen and in the background), defer entirely to it so
+        // we don't double-count watch time or create duplicate title entries.
+        if (YoutubeWatch.mediaActive()) {
+            ytActivePlayback = false
+            return
+        }
+        if (root == null) {
+            // Without a readable screen we no longer know what's playing. The
+            // pump used to keep crediting the last title here, so a failed read
+            // quietly added the current video's time to the previous one.
+            ytActivePlayback = false
+            return
+        }
         // Shorts are watched by scrolling (no watch-page metadata), so try them
         // first; then the standard watch page; then inline autoplay in the feed.
         if (captureYoutubeShorts(pkg, root)) return
         if (captureYoutubeWatchPage(pkg, root)) return
         captureYoutubeFeed(root)
+    }
+
+    // The last search seen in the YouTube app, so an open results page that
+    // keeps firing events doesn't repeat the same record.
+    private var lastYtSearch = ""
+
+    /**
+     * Records a search the child *submitted* in the YouTube app. The search box
+     * is focused while typing; once submitted, the results screen shows the same
+     * view holding the query without focus — that's the state recorded, so
+     * keystrokes and suggestions never appear.
+     *
+     * Every window is searched, not just the active one: on some builds the
+     * search bar and the results list are separate windows. The id also moved
+     * between YouTube versions and forks rename the package, so each known id is
+     * tried under the app's own namespace.
+     */
+    private fun captureYoutubeSearch(pkg: String, root: AccessibilityNodeInfo) {
+        try {
+            val roots = ArrayList<AccessibilityNodeInfo>()
+            roots.add(root)
+            try {
+                windows?.forEach { w ->
+                    val r = w.root ?: return@forEach
+                    if (r.packageName?.toString() == pkg) roots.add(r)
+                }
+            } catch (_: Exception) {
+            }
+            for (r in roots) {
+                for (id in YT_SEARCH_IDS) {
+                    val box = r.findAccessibilityNodeInfosByViewId("$pkg:id/$id")
+                        ?.firstOrNull { !it.text.isNullOrBlank() } ?: continue
+                    if (box.isFocused) return // still typing
+                    val query = box.text?.toString()?.trim() ?: continue
+                    if (query.isEmpty() || query == lastYtSearch) return
+                    // The box shows its hint on the empty search screen.
+                    if (query.equals("search", true)) return
+                    lastYtSearch = query
+                    WebHistoryStore.recordSearchQuery(query, "YouTube")
+                    return
+                }
+            }
+        } catch (_: Exception) {
+        }
     }
 
     /** Standard watch page: reads the video metadata block. Returns true if found. */
@@ -223,6 +340,9 @@ class GuardNestAccessibilityService : AccessibilityService() {
     // Feed autoplay: which video is centred, and since when (dwell detection).
     private var lastFeedTitle: String? = null
     private var lastFeedSince = 0L
+    // Same idea for Shorts, which are scrolled through quickly.
+    private var lastShortTitle: String? = null
+    private var lastShortSince = 0L
 
     /**
      * Best-effort capture of a 16:9 video that autoplays inline in the YouTube
@@ -319,11 +439,20 @@ class GuardNestAccessibilityService : AccessibilityService() {
                 !YT_COUNT.containsMatchIn(it) &&
                 !it.all { c -> c.isDigit() || c == ':' || c == '.' }
         }
-        // Prefer the caption; else record it as a Short from the channel so the
-        // activity still shows up.
-        val title = caption
-            ?: channel.takeIf { it.isNotEmpty() }?.let { "Short from $it" }
-            ?: return false
+        // A Short with no readable caption can't be told apart from any other
+        // Short by the same channel. Recording it as "Short from @handle" made
+        // every one of them merge into a single row with their watch time
+        // summed, so an unidentifiable Short is skipped instead.
+        val title = caption ?: return false
+        // Shorts are watched by scrolling, so only count one the child actually
+        // stayed on.
+        val now = System.currentTimeMillis()
+        if (title != lastShortTitle) {
+            lastShortTitle = title
+            lastShortSince = now
+            return true
+        }
+        if (now - lastShortSince < SHORT_DWELL_MS) return true
         ytActivePlayback = false
         recordYt(title, channel)
         return true
@@ -352,9 +481,15 @@ class GuardNestAccessibilityService : AccessibilityService() {
      * locks.
      */
     private fun pumpYoutubeWatchTime() {
+        // The MediaSession source owns watch time whenever it's active (it keeps
+        // counting full-screen and in the background), so step aside for it.
+        if (YoutubeWatch.mediaActive()) {
+            ytActivePlayback = false
+            return
+        }
         if (!ytActivePlayback) return
         val title = lastYtTitle ?: return
-        if (ForegroundApp.packageName !in YOUTUBE_PKGS) {
+        if (!Pkgs.isYoutube(ForegroundApp.packageName)) {
             ytActivePlayback = false
             return
         }
@@ -382,12 +517,24 @@ class GuardNestAccessibilityService : AccessibilityService() {
      *
      * Returns true if it acted (so the event is consumed).
      */
+    private var lastTamperScan = 0L
+
     private fun guardTamperScreens(pkg: String): Boolean {
-        if (!ChildStore.isPaired(this)) return false
-        if (!DeviceLockdown.isAdminActive(this)) return false
+        // Cheapest test first: this only ever fires on Settings/installer
+        // screens, and it runs for every event from every app. isAdminActive()
+        // is a binder call, so it must not come before this.
         val isSensitive = pkg in SENSITIVE_PACKAGES ||
             pkg.contains("settings") || pkg.contains("packageinstaller")
         if (!isSensitive) return false
+        if (!ChildStore.isPaired(this)) return false
+        if (!DeviceLockdown.isAdminActive(this)) return false
+        // Scrolling a Settings page fires a stream of content-changed events;
+        // walking the whole tree for each of them was the single most expensive
+        // thing we did per event. A short throttle keeps detection effectively
+        // instant while cutting the repeat scans.
+        val now = System.currentTimeMillis()
+        if (now - lastTamperScan < SCAN_THROTTLE_MS) return false
+        lastTamperScan = now
 
         val root = try {
             rootInActiveWindow
@@ -441,11 +588,18 @@ class GuardNestAccessibilityService : AccessibilityService() {
             .collection("children").document(cid)
             .get()
             .addOnSuccessListener { doc ->
-                if (!doc.exists()) {
+                // Only unlock on a definitive server answer. A cached miss (the
+                // device is offline) must NOT release protection, or a child
+                // could turn off the network and uninstall the app.
+                if (!doc.exists() && !doc.metadata.isFromCache) {
                     ChildStore.clear(this)
                     DeviceLockdown.releaseForRemoval(this)
                     WebFilterVpnService.stop(this)
                 }
+            }
+            .addOnFailureListener { e ->
+                // Fail closed: protection stays on and the attempt is recorded.
+                Diag.warn(this, "verifyStillLinked", e)
             }
     }
 
@@ -464,28 +618,31 @@ class GuardNestAccessibilityService : AccessibilityService() {
     }
 
     private var lastContactToast = 0L
+    private var lastAppMgmtScan = 0L
 
     /**
-     * Blocks the child from reaching any app's "App info" or "Uninstall" screen
-     * (the dangerous options from a long-press on an app icon). Instead of
-     * letting them uninstall / force-stop / clear data, GuardNest bounces them
-     * out and tells them to ask the parent. Requires the accessibility service.
+     * Blocks the child from reaching Maryada's own "App info" / "Uninstall"
+     * screen — including the launcher's long-press menu, which the tamper guard
+     * never sees because it only watches Settings and the package installer.
+     * Every other app can be managed normally.
      *
      * Returns true if it acted (the event is consumed).
      */
     private fun guardAppManagementScreens(pkg: String, type: Int): Boolean {
-        if (!ChildStore.isPaired(this)) return false
         val isUninstaller = pkg.contains("packageinstaller")
         val isSettings = pkg.contains("settings")
-        val isLauncher = pkg.contains("launcher") ||
-            pkg.endsWith(".home") ||
-            pkg.contains("trebuchet")
+        val isLauncher = Pkgs.isLauncher(pkg)
         if (!isUninstaller && !isSettings && !isLauncher) return false
+        if (!ChildStore.isPaired(this)) return false
         // For the launcher, only inspect when a new window/popup appears (the
         // long-press menu), not on every home-screen content change.
         if (isLauncher && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             return false
         }
+        // Same throttle as the tamper scan: this also walks the whole tree.
+        val scanAt = System.currentTimeMillis()
+        if (scanAt - lastAppMgmtScan < SCAN_THROTTLE_MS) return false
+        lastAppMgmtScan = scanAt
 
         val root = try {
             rootInActiveWindow
@@ -504,6 +661,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
             APP_INFO_MARKERS.count { text.contains(it) } >= 2
         }
         if (!isAppManagement) return false
+        // Only Maryada's own management screen is off-limits. Blocking every
+        // app's meant the child (and the parent holding the phone) could not
+        // uninstall anything at all, which was never the intent.
+        if (!text.contains("maryada")) return false
 
         performGlobalAction(GLOBAL_ACTION_BACK)
         val now = System.currentTimeMillis()
@@ -511,7 +672,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
             lastContactToast = now
             Toast.makeText(
                 this,
-                "Ask your parent to change or remove apps.",
+                "Ask your parent to remove Maryada.",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -519,37 +680,52 @@ class GuardNestAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Pause / bedtime: every app is blocked EXCEPT emergency calls (the dialer)
-     * and the home screen, so the device isn't fully frozen. Bounces the child
-     * out of any other app. Returns true if it acted.
+     * Pause / bedtime: the home screen stays usable, but the moment the child
+     * opens any app the lock screen covers it (showing the schedule). Doesn't
+     * bounce or freeze the phone — the child can go back to the home screen.
+     * Returns true if it acted (the lock screen is covering an app).
      */
     private fun guardScreenTimeLock(pkg: String): Boolean {
         if (!ScreenGuard.locked) return false
-        if (pkg == packageName || isEmergencyAllowed(pkg)) return false
-        performGlobalAction(GLOBAL_ACTION_HOME)
-        val now = System.currentTimeMillis()
-        if (now - lastPauseToast > 2000) {
-            lastPauseToast = now
-            Toast.makeText(
-                this,
-                "Your device is ${ScreenGuard.label} by your parent. " +
-                    "Only emergency calls are allowed.",
-                Toast.LENGTH_SHORT
-            ).show()
+        // Home screen → the device stays accessible, so drop the lock screen.
+        if (Pkgs.isLauncher(pkg)) {
+            LockOverlay.hide(this)
+            return false
         }
+        // Our own windows (the overlay / the Maryada app) and transient system
+        // windows (status bar, system dialogs) must NOT toggle the overlay —
+        // hiding/showing on those made it flicker on some apps. Leave it as-is.
+        if (pkg == packageName || pkg == "android" || pkg.contains("systemui")) {
+            return false
+        }
+        // A real app is open → cover it with the lock screen.
+        LockOverlay.show(this, ScreenGuard.lockTitle, ScreenGuard.lockSubtitle)
         return true
     }
 
-    /** Apps allowed during pause/bedtime: the home screen, system UI and the
-     *  phone dialer (so emergency calls still work). */
-    private fun isEmergencyAllowed(pkg: String): Boolean {
-        return pkg.contains("launcher") ||
-            pkg.contains("systemui") ||
-            pkg.endsWith(".home") ||
-            pkg.contains("dialer") ||
-            pkg.contains(".phone") ||
-            pkg.contains("incallui") ||
-            pkg.contains("emergency")
+    /**
+     * Covers an app the parent blocked with the same block screen the browser
+     * shows for a blocked site. Bouncing the child to the home screen is only
+     * the fallback for when the overlay permission has been revoked.
+     */
+    private fun blockApp(pkg: String) {
+        if (LockOverlay.canShow(this)) {
+            LockOverlay.show(
+                this,
+                LockOverlay.APP_BLOCKED_TITLE,
+                LockOverlay.APP_BLOCKED_MESSAGE,
+                AlertLog.appLabel(this, pkg),
+            )
+            return
+        }
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        val now = System.currentTimeMillis()
+        if (now - lastToast > 2000) {
+            lastToast = now
+            Toast.makeText(
+                this, "This app is blocked by your parent.", Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     /**
@@ -563,7 +739,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
      */
     private fun guardPermissionLockdown(pkg: String): Boolean {
         if (!ChildStore.isPaired(this)) return false
-        if (Permissions.allGranted(this)) return false
+        if (Permissions.allGrantedCached(this)) return false
         if (isAllowedDuringLockdown(pkg)) return false
 
         // Kick out of the disallowed app and surface the permission screen.
@@ -590,14 +766,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
     }
 
     private fun isAllowedDuringLockdown(pkg: String): Boolean {
-        if (pkg == packageName || pkg == "android") return true
-        return pkg.contains("settings") ||
+        if (pkg == packageName) return true
+        return Pkgs.isEssentialSystem(pkg) ||
             pkg.contains("packageinstaller") ||
-            pkg.contains("permissioncontroller") ||
-            pkg.contains("launcher") ||
-            pkg.contains("systemui") ||
-            pkg.contains("vpndialogs") ||
-            pkg.endsWith(".home")
+            pkg.contains("vpndialogs")
     }
 
     /** Reads visible chat messages from a messaging app's conversation view. */
@@ -614,11 +786,26 @@ class GuardNestAccessibilityService : AccessibilityService() {
             // contacts / business chats); keep it only if it looks like one.
             val number = phoneLike(firstText(root, ids.subtitleId))
                 ?: phoneLike(chatName) ?: ""
-            // Only scrape inside an actual conversation (title present), not the
-            // chat list, so we don't log contact names as messages.
-            val nodes = root.findAccessibilityNodeInfosByViewId(ids.messageId)
-                ?: return
-            for (node in nodes) {
+            // Collect date anchors and message rows together, each tagged with
+            // its vertical screen position. WhatsApp's conversation is a
+            // recycling, reverse-laid-out list, so the accessibility tree's own
+            // order doesn't match the visual order — sorting by position is the
+            // only reliable way to know which date a message sits under.
+            val rows = ArrayList<ChatRow>()
+            scanChatRows(root, ids, 0, rows, intArrayOf(6000))
+            // Visual top-to-bottom. A stable sort keeps the floating date pill
+            // (which overlaps the top message) ahead of that message.
+            rows.sortBy { it.top }
+            // Each message inherits the nearest date anchor above it: the pill
+            // dates the top of the window (where the inline separator has already
+            // scrolled off), and inline separators date everything below them.
+            var currentDay = 0L
+            for (row in rows) {
+                val node = row.node
+                if (node == null) {
+                    if (row.day > 0L) currentDay = row.day
+                    continue
+                }
                 val text = node.text?.toString()?.trim()
                 if (text.isNullOrBlank()) continue
                 // Isolate this one message's row so the time and the send/read
@@ -628,32 +815,187 @@ class GuardNestAccessibilityService : AccessibilityService() {
                     ?.findAccessibilityNodeInfosByViewId(ids.dateId)
                     ?.firstOrNull { !it.text.isNullOrBlank() }
                     ?.text?.toString()?.trim().orEmpty()
-                // WhatsApp draws the delivery/read status ticks only on the
-                // child's OWN (outgoing) messages — the definitive side signal.
-                val outgoing = bubbleOutgoing(bubble, ids.statusId)
+                // WhatsApp right-aligns the child's own messages; the delivery
+                // ticks only back that up when they're present.
+                val outgoing = bubbleSide(bubble, node, ids.statusId)
                 MessageStore.record(
-                    appLabel(pkg), chatName, text, outgoing, timeLabel, number
+                    appLabel(pkg), chatName, text, outgoing, timeLabel, number,
+                    currentDay,
                 )
             }
+        } catch (e: Exception) {
+            Diag.warn(this, "captureChatText", e)
+        }
+    }
+
+    /** A scanned conversation row: either a message ([node] set, [day] 0) or a
+     *  date anchor ([node] null, [day] the resolved day). [top] is its vertical
+     *  screen position, used to order rows the way they actually appear. */
+    private class ChatRow(val top: Int, val node: AccessibilityNodeInfo?, val day: Long)
+
+    /**
+     * Depth-first walk collecting message rows and date anchors. Anchors are the
+     * inline day separators *and* WhatsApp's floating scroll-date pill — the pill
+     * isn't the separator's view id and its id varies by build, so it's matched
+     * by its content (a bare date label) rather than by id.
+     */
+    private fun scanChatRows(
+        node: AccessibilityNodeInfo?,
+        ids: ChatIds,
+        depth: Int,
+        out: MutableList<ChatRow>,
+        budget: IntArray,
+    ) {
+        // WhatsApp nests a conversation row ~25-60 levels deep, so a shallow
+        // depth cap silently found no rows at all. The node budget is what
+        // actually bounds the walk.
+        if (node == null || depth > CHAT_SCAN_MAX_DEPTH || out.size > 240) return
+        if (--budget[0] < 0) return
+        when (node.viewIdResourceName) {
+            ids.dividerId -> {
+                val day = dividerText(node)?.let { resolveDay(it) } ?: 0L
+                out.add(ChatRow(topOf(node), null, day))
+                return
+            }
+
+            ids.messageId -> {
+                out.add(ChatRow(topOf(node), node, 0L))
+                return
+            }
+        }
+        // The floating scroll-date pill (and any other standalone date label): a
+        // leaf whose entire text is a date. resolveDay returns 0 for a bubble
+        // time like "10:24 PM", so per-message times are never mistaken for it,
+        // and a message that merely reads "Monday" is caught by the messageId
+        // branch above before it can reach here.
+        if (node.childCount == 0) {
+            val t = node.text?.toString()?.trim()
+            if (!t.isNullOrEmpty() && t.length <= 24) {
+                val day = resolveDay(t)
+                if (day > 0L) {
+                    out.add(ChatRow(topOf(node), null, day))
+                    return
+                }
+            }
+        }
+        for (i in 0 until node.childCount) {
+            scanChatRows(node.getChild(i), ids, depth + 1, out, budget)
+        }
+    }
+
+    /** Screen-space top of [node], for ordering rows the way they appear. */
+    private fun topOf(node: AccessibilityNodeInfo): Int {
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        return r.top
+    }
+
+    /** The divider's date text — on the node itself or a text child under it. */
+    private fun dividerText(node: AccessibilityNodeInfo, depth: Int = 0): String? {
+        node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        if (depth >= 4) return null
+        for (i in 0 until node.childCount) {
+            val c = node.getChild(i) ?: continue
+            dividerText(c, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * Turns a separator label into the start of that day in millis, or 0 when it
+     * can't be read. Resolved at capture time so the stored value stays put:
+     * "Today" becomes "Yesterday" tomorrow, and keying anything off the label
+     * itself would make the same message look new.
+     */
+    private fun resolveDay(label: String): Long {
+        val l = label.trim().lowercase(Locale.ROOT)
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        if (l == "today") return cal.timeInMillis
+        if (l == "yesterday") {
+            cal.add(Calendar.DAY_OF_YEAR, -1)
+            return cal.timeInMillis
+        }
+        // WhatsApp shows a weekday name for the past week; that means the most
+        // recent one before today.
+        val weekday = WEEKDAYS.indexOf(l)
+        if (weekday >= 0) {
+            // WEEKDAYS is Monday-first (0..6); Calendar is Sunday-first (1..7).
+            // The old `weekday + Calendar.MONDAY` mapped Sunday to 8, which no
+            // Calendar day ever equals, so every "Sunday" separator failed to
+            // resolve and its messages lost their date.
+            val target = ((weekday + 1) % 7) + 1
+            var guard = 0
+            do {
+                cal.add(Calendar.DAY_OF_YEAR, -1)
+                guard++
+            } while (cal.get(Calendar.DAY_OF_WEEK) != target && guard < 8)
+            return if (guard < 8) cal.timeInMillis else 0L
+        }
+        val m = Regex("^(\\d{1,2})[/.-](\\d{1,2})[/.-](\\d{2,4})$").find(l) ?: return 0L
+        val day = m.groupValues[1].toIntOrNull() ?: return 0L
+        val month = m.groupValues[2].toIntOrNull() ?: return 0L
+        var year = m.groupValues[3].toIntOrNull() ?: return 0L
+        if (year < 100) year += 2000
+        return try {
+            cal.set(year, month - 1, day, 0, 0, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            cal.timeInMillis
         } catch (_: Exception) {
+            0L
         }
     }
 
     /**
-     * True if this message row is the child's own (outgoing). Detected by the
-     * send/read tick icon — first by its view id, then (since icon views are
-     * often excluded from the accessibility tree) by any node whose
-     * content-description reports a delivery status.
+     * Which side of the conversation this row sits on: true outgoing, false
+     * incoming, null when the row gave nothing to go on.
+     *
+     * Delivery ticks come first because only the child's own messages have
+     * them. Alignment is the fallback, compared as a *ratio* of the two side
+     * gaps rather than a fixed margin: a long message nearly fills the width, so
+     * an absolute margin read it as centred and the row lost its side. Nothing
+     * is guessed — a row that reads as neither must stay unknown, because the
+     * store uses the side to tell apart the same short text sent by both people.
      */
-    private fun bubbleOutgoing(
+    private fun bubbleSide(
         bubble: AccessibilityNodeInfo?,
+        textNode: AccessibilityNodeInfo,
         statusId: String,
-    ): Boolean {
-        if (bubble == null) return false
-        if (bubble.findAccessibilityNodeInfosByViewId(statusId)?.isNotEmpty() == true) {
-            return true
+    ): Boolean? {
+        if (bubble != null) {
+            if (bubble.findAccessibilityNodeInfosByViewId(statusId)
+                    ?.isNotEmpty() == true
+            ) {
+                return true
+            }
+            if (hasStatusDescription(bubble, 0)) return true
         }
-        return hasStatusDescription(bubble, 0)
+        sideOf(textNode)?.let { return it }
+        return bubble?.let { sideOf(it) }
+    }
+
+    /**
+     * True when [node] sits clearly to the right, false clearly to the left, and
+     * null when the two gaps are too close to call.
+     */
+    private fun sideOf(node: AccessibilityNodeInfo): Boolean? {
+        val screenWidth = resources.displayMetrics.widthPixels
+        if (screenWidth <= 0) return null
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        if (bounds.width() <= 0) return null
+        // +1 keeps the ratio finite when a bubble touches the screen edge.
+        val leftGap = bounds.left + 1
+        val rightGap = (screenWidth - bounds.right) + 1
+        return when {
+            leftGap > rightGap * SIDE_RATIO -> true
+            rightGap > leftGap * SIDE_RATIO -> false
+            else -> null
+        }
     }
 
     /** Recursively checks a bubble for a delivery-status content-description. */
@@ -829,12 +1171,11 @@ class GuardNestAccessibilityService : AccessibilityService() {
         } ?: return false
         if (!isIncognito(root)) return false
         lastIncognitoAction = now
-        performGlobalAction(GLOBAL_ACTION_BACK)
-        Toast.makeText(
-            this,
-            "Incognito browsing isn’t allowed. Ask your parent.",
-            Toast.LENGTH_LONG
-        ).show()
+        showBlockPage(
+            null,
+            "Hare Krishna, private browsing is turned off on this phone.",
+            title = "Incognito Disabled",
+        )
         return true
     }
 
@@ -880,7 +1221,6 @@ class GuardNestAccessibilityService : AccessibilityService() {
         } ?: return
         try {
             val addr = readBrowserAddress(root, pkg) ?: return
-            WebHistoryStore.recordVisit(addr)
             enforceWebFilter(addr)
             maybeCaptureBrowserYoutube(root, addr)
         } catch (_: Exception) {
@@ -890,16 +1230,33 @@ class GuardNestAccessibilityService : AccessibilityService() {
     /** Reads the browser's current address-bar text (URL-bar id first, then a
      *  generic URL-like node fallback). */
     private fun readBrowserAddress(root: AccessibilityNodeInfo, pkg: String): String? {
+        // Each findAccessibilityNodeInfosByViewId is a binder round-trip, and
+        // this used to try all ten ids on every window of every read. Remember
+        // the one that worked for this browser and try it first.
+        val known = urlBarIdCache[pkg]
+        if (known != null) {
+            textOfViewId(root, known)?.let { return it }
+        }
         for (id in URL_BAR_IDS) {
             val viewId = if (id.contains(":")) id else "$pkg:id/$id"
-            val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
-            if (nodes.isNullOrEmpty()) continue
-            for (node in nodes) {
-                val text = node.text?.toString()
-                if (!text.isNullOrBlank()) return text
+            if (viewId == known) continue
+            val text = textOfViewId(root, viewId)
+            if (text != null) {
+                urlBarIdCache[pkg] = viewId
+                return text
             }
         }
         return findUrlLikeHost(root)
+    }
+
+    private fun textOfViewId(root: AccessibilityNodeInfo, viewId: String): String? {
+        val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
+        if (nodes.isNullOrEmpty()) return null
+        for (node in nodes) {
+            val text = node.text?.toString()
+            if (!text.isNullOrBlank()) return text
+        }
+        return null
     }
 
     /**
@@ -933,16 +1290,49 @@ class GuardNestAccessibilityService : AccessibilityService() {
      * accessibility event (which is why it previously only triggered on a
      * manual refresh).
      */
-    private fun guardBrowserNow() {
-        val pkg = ForegroundApp.packageName
-        if (pkg.isEmpty() || !ForegroundApp.isBrowserForeground()) return
-        val addr = readAnyBrowserAddress(pkg)
-        if (addr != null) enforceWebFilter(addr)
-        // Also scan the page text for blocked keywords (throttled internally).
-        scanPageContent()
+    /**
+     * Updates [ForegroundApp] from the currently active/focused window. Relying
+     * only on TYPE_WINDOW_STATE_CHANGED events is unreliable on some OEMs (e.g.
+     * ColorOS/Realme), where opening an app can emit only content-changed events
+     * — leaving the foreground stuck on the previous app so the web guards never
+     * run. Reading the active window keeps the foreground package correct.
+     */
+    private fun refreshForegroundFromActiveWindow() {
+        val pkg = try {
+            windows?.firstOrNull { it.isActive }?.root?.packageName?.toString()
+                ?: windows?.firstOrNull { it.isFocused }?.root?.packageName?.toString()
+                ?: rootInActiveWindow?.packageName?.toString()
+        } catch (_: Exception) {
+            null
+        }
+        if (!pkg.isNullOrEmpty() && pkg != packageName) {
+            ForegroundApp.set(pkg)
+        }
     }
 
-    private var lastBrowserYtTitle: String? = null
+    /** Returns true while a browser is foreground (so the caller polls fast). */
+    private fun guardBrowserNow(): Boolean {
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm != null && !pm.isInteractive) {
+            WebHistoryStore.endVisit()
+            return false
+        }
+        refreshForegroundFromActiveWindow()
+        val pkg = ForegroundApp.packageName
+        if (pkg.isEmpty() || !ForegroundApp.isBrowserForeground()) {
+            WebHistoryStore.endVisit()
+            return false
+        }
+        val addr = readAnyBrowserAddress(pkg)
+        if (addr != null) {
+            WebHistoryStore.recordVisit(addr)
+            WebHistoryStore.recordSearch(addr)
+            enforceWebFilter(addr)
+        }
+        // Also scan the page text for blocked keywords (throttled internally).
+        scanPageContent()
+        return true
+    }
 
     /**
      * When the child is watching YouTube in a *browser* (youtube.com) rather
@@ -969,9 +1359,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
         // Drop the notification-count prefix Chrome adds, e.g. "(3) Title".
         name = name.replace(Regex("^\\(\\d+\\)\\s*"), "").trim()
         if (name.length < 2 || name.equals("youtube", ignoreCase = true)) return
-        if (name == lastBrowserYtTitle) return
-        lastBrowserYtTitle = name
-        YoutubeStore.record(name, "", 0L)
+        // recordYt (not a bare record) so repeated captures of the same title
+        // accrue watch time — otherwise a browser-watched video could never
+        // cross the minimum-watched threshold and would stay invisible.
+        recordYt(name, "")
     }
 
     /** The active window's accessibility title (Chrome sets this to the page
@@ -1041,34 +1432,80 @@ class GuardNestAccessibilityService : AccessibilityService() {
     }
 
     /** Blocks the page (leaves the site) when the address-bar host is filtered
-     *  by the parent's rule, or the domain itself contains a blocked brand
-     *  keyword (e.g. parimatch.com, pornhub.com). */
+     *  by the parent's rule, contains a blocked brand keyword (e.g.
+     *  parimatch.com, pornhub.com), or is YouTube (always blocked in the browser
+     *  — the child should use the YouTube app instead). */
     private fun enforceWebFilter(addressBarText: String) {
         val host = hostOf(addressBarText) ?: return
+        val youtubeWeb = WebFilter.isYoutubeWeb(host)
         val brandHit = ContentFilter.matchHost(host)
-        if (!WebFilter.isBlocked(host) && brandHit == null) return
-        // Leave the blocked site.
-        performGlobalAction(GLOBAL_ACTION_BACK)
-        WebHistoryStore.recordBlocked(host)
-        val reason = if (brandHit != null) "matched \u201C$brandHit\u201D" else "on your block list"
+        val filterReason = WebFilter.reasonFor(host)
+        if (!youtubeWeb && filterReason == null && brandHit == null) return
+        // Show the block page (it bounces off the unsafe page first).
+        showBlockPage(
+            host,
+            if (youtubeWeb) "YouTube works in the app, not the browser."
+            else "Hare Krishna, this website may not be safe for you"
+        )
+        // Prefer a real category over "the parent listed it", so a gambling site
+        // reads as Gambling however it was caught.
+        val brandCategory = brandHit?.let { ContentFilter.categoryOf(it) }
+        WebHistoryStore.recordBlocked(
+            host,
+            when {
+                youtubeWeb -> WebFilter.REASON_YOUTUBE
+                filterReason != null &&
+                    filterReason != WebFilter.REASON_BLOCKLIST -> filterReason
+                brandCategory != null -> brandCategory
+                else -> WebFilter.categoryHint(host)
+                    ?: filterReason
+                    ?: WebFilter.REASON_KEYWORD
+            },
+        )
+        val reason = when {
+            youtubeWeb -> "YouTube is only allowed in the app"
+            brandHit != null -> "matched \u201C$brandHit\u201D"
+            else -> "on your block list"
+        }
         AlertLog.log(
             this, "blockedWebsite",
             "Blocked $host ($reason)",
             throttleKey = "site:$host",
         )
+    }
+
+    /** Shows the block message as a brief floating notice, throttled so repeated
+     *  scans of the same page don't spam it. Uses an overlay (not a system toast)
+     *  so it shows even while GuardNest is backgrounded. */
+    /**
+     * Sends the browser back off the unsafe page and shows the full-screen
+     * [BlockActivity] block page. Throttled so a burst of detections doesn't
+     * relaunch it (the singleTask activity dedupes anyway). The bounce happens
+     * while the browser is still foreground, so it's hidden behind the block
+     * page and closing the page returns the child to the previous safe page.
+     */
+    private fun showBlockPage(
+        host: String?,
+        message: String,
+        title: String = "",
+    ) {
         val now = System.currentTimeMillis()
-        if (now - lastBlockToast > 1500) {
-            lastBlockToast = now
-            Toast.makeText(
-                this,
-                "Hare Krishna, this website may not be safe for you",
-                Toast.LENGTH_LONG,
-            ).show()
+        if (now - lastBlockPageAt < 1200) return
+        lastBlockPageAt = now
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        try {
+            startActivity(
+                Intent(this, BlockActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    .putExtra(BlockActivity.EXTRA_HOST, host ?: "")
+                    .putExtra(BlockActivity.EXTRA_MESSAGE, message)
+                    .putExtra(BlockActivity.EXTRA_TITLE, title)
+            )
+        } catch (_: Exception) {
         }
     }
 
     private var lastContentScan = 0L
-    private var lastContentBlockToast = 0L
 
     /**
      * Scans the browser's *visible page text* for unsafe content and bounces
@@ -1080,8 +1517,13 @@ class GuardNestAccessibilityService : AccessibilityService() {
      */
     private fun scanPageContent() {
         val now = System.currentTimeMillis()
-        if (now - lastContentScan < 1200L) return
+        if (now - lastContentScan < 250L) return
         lastContentScan = now
+        // Only scan an actually-loaded web page. When there's no clear host the
+        // child is typing in the search bar / on a new-tab or suggestions view —
+        // never block that. Also skip search-engine result pages (link lists).
+        val curHost = hostOf(readAnyBrowserAddress(ForegroundApp.packageName) ?: "")
+        if (curHost == null || WebFilter.isSearchEngine(curHost)) return
         // Match each window's text independently so one text-heavy window can't
         // use up the character budget before the page's own window is scanned.
         var hit: String? = null
@@ -1105,22 +1547,142 @@ class GuardNestAccessibilityService : AccessibilityService() {
             )
         }
         val matched = hit ?: return
-        // Leave the blocked page.
-        performGlobalAction(GLOBAL_ACTION_BACK)
         val host = hostOf(readAnyBrowserAddress(ForegroundApp.packageName) ?: "")
-        if (host != null) WebHistoryStore.recordBlocked(host)
-        if (now - lastContentBlockToast > 1500) {
-            lastContentBlockToast = now
-            Toast.makeText(
-                this,
-                "Hare Krishna, this website may not be safe for you",
-                Toast.LENGTH_LONG,
-            ).show()
+        showBlockPage(host, "Hare Krishna, this website may not be safe for you")
+        if (host != null) {
+            WebHistoryStore.recordBlocked(
+                host,
+                ContentFilter.categoryOf(matched)
+                    ?: WebFilter.categoryHint(host)
+                    ?: WebFilter.REASON_CONTENT,
+            )
         }
         AlertLog.log(
             this, "blockedWebsite",
             "Blocked ${host ?: "a page"} (unsafe content: \u201C$matched\u201D)",
             throttleKey = "content:${host ?: matched}",
+        )
+    }
+
+    /**
+     * Captures the browser screen for OCR in [onImageShot], which reads the
+     * words rendered on the page (text the accessibility tree hides) and blocks
+     * on any unsafe word. Runs only while a browser is foreground and the screen
+     * is on, is heavily throttled, and uses the accessibility screenshot API
+     * (API 30+), so there's no MediaProjection consent / cast icon.
+     */
+    private fun guardBrowserImageNow(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        if (!ChildStore.isPaired(this)) return false
+        val pkg = ForegroundApp.packageName
+        if (pkg.isEmpty() || !ForegroundApp.isBrowserForeground()) {
+            lastFrameSig = 0L
+            return false
+        }
+        val now = System.currentTimeMillis()
+        if (imgShotInFlight || now - lastImgShot < IMAGE_GUARD_MS) return true
+        val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+        if (pm != null && !pm.isInteractive) return false // screen off — nothing to scan
+        lastImgShot = now
+        imgShotInFlight = true
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        onImageShot(screenshot)
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        imgShotInFlight = false
+                    }
+                }
+            )
+        } catch (_: Exception) {
+            imgShotInFlight = false
+        }
+        return true
+    }
+
+    /**
+     * Converts the screenshot to a software bitmap and OCRs it, reading the
+     * words actually rendered on the page — catching unsafe text the
+     * accessibility tree never exposes (image text, canvas- or WebGL-drawn
+     * pages, obfuscated views), which is why some sites slipped past the
+     * node-text scan. It only runs here (browser foreground) — never
+     * system-wide.
+     */
+    private fun onImageShot(screenshot: ScreenshotResult) {
+        val buffer = screenshot.hardwareBuffer
+        val bmp: Bitmap? = try {
+            val hw = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
+            val copy = hw?.copy(Bitmap.Config.ARGB_8888, false)
+            hw?.recycle()
+            copy
+        } catch (_: Exception) {
+            null
+        } finally {
+            try {
+                buffer.close()
+            } catch (_: Exception) {
+            }
+        }
+        if (bmp == null) {
+            imgShotInFlight = false
+            return
+        }
+
+        // Skip the OCR when the screen is unchanged since the last scan (a static
+        // page) so the costly text recognition runs only on new content.
+        val sig = ImageContentFilter.signature(bmp)
+        if (sig != 0L && sig == lastFrameSig) {
+            bmp.recycle()
+            imgShotInFlight = false
+            return
+        }
+        lastFrameSig = sig
+
+        // OCR the rendered page and block on any unsafe word ([ContentFilter]).
+        try {
+            textRecognizer.process(InputImage.fromBitmap(bmp, 0))
+                .addOnSuccessListener { result ->
+                    try {
+                        val hit = ContentFilter.match(result.text.lowercase())
+                        if (hit != null) blockOcrContent(hit)
+                    } catch (_: Exception) {
+                    }
+                    bmp.recycle()
+                    imgShotInFlight = false
+                }
+                .addOnFailureListener {
+                    bmp.recycle()
+                    imgShotInFlight = false
+                }
+        } catch (_: Exception) {
+            bmp.recycle()
+            imgShotInFlight = false
+        }
+    }
+
+    /** Leaves the current page and logs an alert after OCR reads an unsafe word
+     *  that the on-screen accessibility text tree didn't expose. */
+    private fun blockOcrContent(matched: String) {
+        val host = hostOf(readAnyBrowserAddress(ForegroundApp.packageName) ?: "")
+        // Only block a real loaded page — not the search bar / suggestions (no
+        // host) and not search-engine result pages (they only list links).
+        if (host == null || WebFilter.isSearchEngine(host)) return
+        showBlockPage(host, "Hare Krishna, this website may not be safe for you")
+        WebHistoryStore.recordBlocked(
+            host,
+            ContentFilter.categoryOf(matched)
+                ?: WebFilter.categoryHint(host)
+                ?: WebFilter.REASON_CONTENT,
+        )
+        AlertLog.log(
+            this, "blockedWebsite",
+            "Blocked $host (unsafe content: \u201C$matched\u201D)",
+            throttleKey = "content:$host",
         )
     }
 
@@ -1140,35 +1702,69 @@ class GuardNestAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         AccessibilityController.service = this
+        // If the child is coming back from Temporary Access, re-enabling
+        // accessibility is the "restore protection" signal — lift the call-log/
+        // SMS denials right away so monitoring resumes without waiting for a tick.
+        EnforcementService.restoreTempAccessIfRecovered(this)
         ytHandler.postDelayed(ytPump, YT_PUMP_MS)
         ytHandler.postDelayed(browserGuard, BROWSER_GUARD_MS)
+        ytHandler.postDelayed(imageGuard, IMAGE_GUARD_MS)
     }
 
     override fun onDestroy() {
+        WebHistoryStore.endVisit()
         AccessibilityController.service = null
         ytHandler.removeCallbacks(ytPump)
         ytHandler.removeCallbacks(browserGuard)
+        ytHandler.removeCallbacks(imageGuard)
         super.onDestroy()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        WebHistoryStore.endVisit()
         AccessibilityController.service = null
         ytHandler.removeCallbacks(ytPump)
         ytHandler.removeCallbacks(browserGuard)
+        ytHandler.removeCallbacks(imageGuard)
         return super.onUnbind(intent)
     }
 
     private companion object {
-        /** YouTube app packages: official plus the common Vanced/ReVanced forks. */
-        val YOUTUBE_PKGS = setOf(
-            "com.google.android.youtube",
-            "app.vanced.android.youtube",
-            "app.revanced.android.youtube",
-            "app.rvx.android.youtube",
-        )
-
         /** Minimum gap between OCR screenshots of a chat (ms). */
         const val SHOT_INTERVAL_MS = 4000L
+
+        /** Minimum gap between full view-tree scans for tamper / app-management
+         *  screens. Keeps detection near-instant without re-walking the tree for
+         *  every content-changed event while the child scrolls. */
+        const val SCAN_THROTTLE_MS = 300L
+
+        /** Minimum gap between the per-event chat / YouTube tree scans. */
+        const val CAPTURE_THROTTLE_MS = 500L
+
+        /** Faster chat scan while the child is actively scrolling WhatsApp. The
+         *  floating date pill only shows during a scroll and fades ~1s after it
+         *  stops, so a quicker cadence catches it before it disappears; it
+         *  applies to scroll events only, so there's no cost while idle. */
+        const val CHAT_SCROLL_THROTTLE_MS = 200L
+
+        /** Conversation rows sit far deeper than a typical view tree — WhatsApp
+         *  nests them 25-60 levels down. */
+        const val CHAT_SCAN_MAX_DEPTH = 80
+
+        /** Weekday separator labels, Monday first to match Calendar.MONDAY. */
+        val WEEKDAYS = listOf(
+            "monday", "tuesday", "wednesday", "thursday", "friday",
+            "saturday", "sunday",
+        )
+
+        /** Search-box ids used by YouTube and its forks, newest first. */
+        val YT_SEARCH_IDS = listOf(
+            "search_edit_text", "search_bar_text", "search_box_text",
+            "search_query", "search_term",
+        )
+
+        /** How much wider one side gap must be to call a chat bubble's side. */
+        const val SIDE_RATIO = 1.6f
 
         /** Max gap between YouTube captures still counted as continuous watching. */
         const val YT_MAX_GAP_MS = 15_000L
@@ -1176,9 +1772,17 @@ class GuardNestAccessibilityService : AccessibilityService() {
         const val YT_PUMP_MS = 8_000L
         /** How often the browser guard re-checks the address bar for blocked sites. */
         const val BROWSER_GUARD_MS = 400L
+        /** How often it looks again while no browser is open. */
+        const val BROWSER_IDLE_MS = 2_000L
+        /** How often the browser OCR guard screenshots the browser (ms). A
+         *  static page skips the OCR pass (see the frame signature), so this can
+         *  stay responsive without a real battery cost. */
+        const val IMAGE_GUARD_MS = 2_000L
         /** How long a feed video must stay centred before it counts as watched
          *  — only videos actually watched (>30s), not scrolled past, are logged. */
         const val FEED_DWELL_MS = 30_000L
+        /** How long a Short must stay on screen before it counts as watched. */
+        const val SHORT_DWELL_MS = 3_000L
 
         /** Delivery-status words (in a bubble's description) that mark it outgoing. */
         val STATUS_WORDS = listOf("delivered", "read", "sent", "pending")
@@ -1227,6 +1831,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
             val dateId: String,
             val subtitleId: String,
             val statusId: String,
+            val dividerId: String,
         )
 
         val CHAT_SCRAPE: Map<String, ChatIds> = mapOf(
@@ -1236,6 +1841,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
                 "com.whatsapp:id/date",
                 "com.whatsapp:id/conversation_contact_status",
                 "com.whatsapp:id/status",
+                "com.whatsapp:id/conversation_row_date_divider",
             ),
             "com.whatsapp.w4b" to ChatIds(
                 "com.whatsapp.w4b:id/message_text",
@@ -1243,6 +1849,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
                 "com.whatsapp.w4b:id/date",
                 "com.whatsapp.w4b:id/conversation_contact_status",
                 "com.whatsapp.w4b:id/status",
+                "com.whatsapp.w4b:id/conversation_row_date_divider",
             ),
         )
 

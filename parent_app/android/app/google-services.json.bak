@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "361102633654",
+    "project_id": "guardnest-1ec2c",
+    "storage_bucket": "guardnest-1ec2c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:361102633654:android:dad20139ce8d5239ccd417",
+        "android_client_info": {
+          "package_name": "com.guardnest.guardnest_parent"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhb3mxbOPYI0zDngE7k4UuNQWz1NcnW_w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

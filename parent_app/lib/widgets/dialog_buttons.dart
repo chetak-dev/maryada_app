@@ -18,8 +18,8 @@ class DialogCancelButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return OutlinedButton(
       style: OutlinedButton.styleFrom(
-        foregroundColor: AppColors.textSecondary,
-        side: const BorderSide(color: AppColors.border),
+        foregroundColor: AppColors.textSecondaryOf(context),
+        side: BorderSide(color: AppColors.borderOf(context)),
         minimumSize: const Size(0, 44),
         padding: const EdgeInsets.symmetric(horizontal: 18),
         shape: RoundedRectangleBorder(

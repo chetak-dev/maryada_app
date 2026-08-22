@@ -94,6 +94,30 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _signInWithGoogle() async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (!AuthService.instance.isConfigured) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Google sign-in needs a connection.')),
+      );
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      // A false result means the user dismissed the picker, which isn't a
+      // failure worth reporting.
+      await AuthService.instance.signInWithGoogle();
+      // AuthGate reacts to the sign-in automatically.
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text(AuthService.friendlyError(e))),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -212,6 +236,26 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ),
                                     )
                                   : Text(_isSignUp ? 'Create account' : 'Sign in'),
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            Row(
+                              children: [
+                                const Expanded(child: Divider()),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: AppSpacing.sm),
+                                  child: Text('or',
+                                      style: theme.textTheme.bodySmall),
+                                ),
+                                const Expanded(child: Divider()),
+                              ],
+                            ),
+                            const SizedBox(height: AppSpacing.md),
+                            OutlinedButton.icon(
+                              onPressed: _busy ? null : _signInWithGoogle,
+                              icon: const Icon(Icons.g_mobiledata_rounded,
+                                  size: 28),
+                              label: const Text('Continue with Google'),
                             ),
                           ],
                         ),

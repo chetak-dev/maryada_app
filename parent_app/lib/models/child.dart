@@ -2,33 +2,31 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// High-level status of a child's device, shown to the guardian.
-enum ChildStatus { online, needsAttention, paired, offline }
+/// A profile is either fully protected (every required permission granted on
+/// the device) or it isn't. A quiet device is NOT the same thing: phones kill
+/// background services, so a missed heartbeat used to flip a perfectly
+/// protected child to "Offline" until they opened the app. Only a missing
+/// permission — something the parent can actually act on — reads as offline.
+enum ChildStatus { online, offline }
 
 extension ChildStatusUi on ChildStatus {
   String get label => switch (this) {
         ChildStatus.online => 'Protected',
-        ChildStatus.needsAttention => 'Permission missing',
-        ChildStatus.paired => 'Setting up',
-        ChildStatus.offline => 'Offline',
+        ChildStatus.offline => 'Needs attention',
       };
 
   Color get color => switch (this) {
         ChildStatus.online => AppColors.success,
-        ChildStatus.needsAttention => AppColors.warning,
-        ChildStatus.paired => AppColors.primary,
-        ChildStatus.offline => AppColors.danger,
+        ChildStatus.offline => AppColors.warning,
       };
 
   IconData get icon => switch (this) {
         ChildStatus.online => Icons.verified_user_rounded,
-        ChildStatus.needsAttention => Icons.gpp_maybe_rounded,
-        ChildStatus.paired => Icons.sync_rounded,
-        ChildStatus.offline => Icons.cloud_off_rounded,
+        ChildStatus.offline => Icons.gpp_maybe_rounded,
       };
 }
 
-/// A monitored child + their device (UI model; backend wiring comes later).
+/// A monitored child, their status and the last thing their device reported.
 class Child {
   final String id;
   final String name;
@@ -56,6 +54,18 @@ class Child {
   /// Empty until the device reports it via heartbeat.
   final Map<String, bool> protections;
 
+  /// The child app's installed version, reported via heartbeat. 0 / null until
+  /// the device reports it (builds older than 1.0.4 don't report a version).
+  final int appVersionCode;
+  final String? appVersionName;
+
+  /// The most recent failure the child device reported through its heartbeat
+  /// (e.g. a rejected write or a permission it lost). The device can't show a
+  /// parent anything itself, so this is the only way a silent breakage on a
+  /// remote device becomes visible.
+  final String? lastError;
+  final DateTime? lastErrorAt;
+
   const Child({
     required this.id,
     required this.name,
@@ -71,11 +81,14 @@ class Child {
     this.lockboxActive = false,
     this.lockboxSince,
     this.protections = const {},
+    this.appVersionCode = 0,
+    this.appVersionName,
+    this.lastError,
+    this.lastErrorAt,
   });
 
-  /// If the device stops sending heartbeats (uninstalled / off / no network)
-  /// its stored `online` flag can't update — so we treat a stale heartbeat as
-  /// offline regardless of what the document says.
+  /// A silent device is still worth surfacing, but as "last seen", never as the
+  /// headline status — see [ChildStatus].
   static const heartbeatTimeout = Duration(minutes: 5);
 
   bool get isStale {
@@ -83,13 +96,29 @@ class Child {
     return ls == null || DateTime.now().difference(ls) > heartbeatTimeout;
   }
 
-  /// Status corrected for heartbeat freshness (what the UI should show).
-  ChildStatus get effectiveStatus {
-    if (status == ChildStatus.offline) return status; // unpaired
-    return isStale ? ChildStatus.offline : status;
-  }
+  /// What the UI should show. Kept as a getter so callers don't have to know
+  /// that the status already accounts for everything.
+  ChildStatus get effectiveStatus => status;
 
   bool get hasLocation => lat != null && lng != null;
+
+  /// A device error is only worth showing while it's recent — an old one has
+  /// usually been resolved by a restart or a re-grant.
+  bool get hasRecentError {
+    final at = lastErrorAt;
+    final error = lastError;
+    if (error == null || error.isEmpty || at == null) return false;
+    // Existing devices run before the hardened rules are deployed. Their
+    // best-effort global registration is expected to be rejected while the
+    // legacy child-document trust path continues protecting them; that is a
+    // migration state, not a device problem the parent can act on.
+    final normalized = error.toLowerCase();
+    if (normalized.startsWith('ensuredeviceregistered:') &&
+        normalized.contains('permission_denied')) {
+      return false;
+    }
+    return DateTime.now().difference(at) < const Duration(hours: 24);
+  }
 
   /// Protections currently turned off on the device (from the live heartbeat).
   List<String> get offProtections => protections.entries
@@ -101,7 +130,8 @@ class Child {
       name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase();
 }
 
-/// Placeholder data so the dashboard is explorable before the backend exists.
+/// Sample profiles shown only before Firebase is connected, so the app can be
+/// explored offline.
 const demoChildren = <Child>[
   Child(
     id: '1',
@@ -115,6 +145,6 @@ const demoChildren = <Child>[
     name: 'Meera',
     deviceModel: 'Samsung Galaxy A15',
     avatarColor: Color(0xFF10B981),
-    status: ChildStatus.needsAttention,
+    status: ChildStatus.offline,
   ),
 ];

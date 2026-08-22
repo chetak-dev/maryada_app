@@ -13,7 +13,10 @@ import com.google.firebase.firestore.FirebaseFirestore
  * over and over) from spamming the feed.
  */
 object AlertLog {
+    // Written from the accessibility thread, the enforcement service and the
+    // notification listener, so the throttle map must be guarded.
     private val lastByKey = HashMap<String, Long>()
+    private val lock = Any()
     private const val THROTTLE_MS = 60_000L
 
     fun log(ctx: Context, type: String, detail: String, throttleKey: String? = null) {
@@ -21,9 +24,11 @@ object AlertLog {
         val cid = ChildStore.childId(ctx) ?: return
         if (throttleKey != null) {
             val now = System.currentTimeMillis()
-            val last = lastByKey[throttleKey] ?: 0L
-            if (now - last < THROTTLE_MS) return
-            lastByKey[throttleKey] = now
+            synchronized(lock) {
+                val last = lastByKey[throttleKey] ?: 0L
+                if (now - last < THROTTLE_MS) return
+                lastByKey[throttleKey] = now
+            }
         }
         try {
             FirebaseFirestore.getInstance()
@@ -37,7 +42,9 @@ object AlertLog {
                         "at" to FieldValue.serverTimestamp(),
                     )
                 )
-        } catch (_: Exception) {
+                .addOnFailureListener { Diag.warn(ctx, "alertLog", it) }
+        } catch (e: Exception) {
+            Diag.warn(ctx, "alertLog", e)
         }
     }
 

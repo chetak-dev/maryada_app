@@ -6,10 +6,8 @@ import '../../theme/tokens.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/dialog_buttons.dart';
 import '../../widgets/theme_toggle_button.dart';
-import '../publish_update/publish_update_screen.dart';
 
-/// Account & app management. Hosts the actions that used to live in the
-/// dashboard overflow menu (publish update, sign out) plus brand/about info.
+/// Account & app management: appearance and sign-out plus brand/about info.
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key, this.uid});
 
@@ -57,24 +55,6 @@ class SettingsScreen extends StatelessWidget {
                   ?.copyWith(color: AppColors.textSecondary)),
           const SizedBox(height: AppSpacing.sm),
           const _ThemeCard(),
-          const SizedBox(height: AppSpacing.lg),
-          Text('Device management',
-              style: theme.textTheme.titleSmall
-                  ?.copyWith(color: AppColors.textSecondary)),
-          const SizedBox(height: AppSpacing.sm),
-          Card(
-            child: _SettingsTile(
-              icon: Icons.system_update_rounded,
-              iconColor: AppColors.primary,
-              title: 'Publish app update',
-              subtitle: 'Push a new child app version over the air',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const PublishUpdateScreen(),
-                ),
-              ),
-            ),
-          ),
           const SizedBox(height: AppSpacing.lg),
           Text('Account',
               style: theme.textTheme.titleSmall

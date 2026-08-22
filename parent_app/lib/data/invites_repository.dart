@@ -2,14 +2,17 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../models/app_user.dart';
 import 'db.dart';
 
-/// A pending host invite (`invites/{code}`). An admin creates one for an email
-/// (optionally pre-setting a child limit); when that email signs in for the
-/// first time it's redeemed and the account becomes a host.
+/// A pending org-admin access grant (`invites/{code}`). A site admin creates
+/// one for an email (setting view/edit access and a child limit); when that
+/// email signs in for the first time it's redeemed and the account becomes an
+/// org admin with that access.
 class Invite {
   final String code;
   final String email;
+  final AccessLevel access;
   final int maxChildren;
   final bool used;
   final DateTime? createdAt;
@@ -17,6 +20,7 @@ class Invite {
   const Invite({
     required this.code,
     required this.email,
+    required this.access,
     required this.maxChildren,
     required this.used,
     this.createdAt,
@@ -27,6 +31,7 @@ class Invite {
     return Invite(
       code: code,
       email: (m['email'] ?? '').toString(),
+      access: accessFromId(m['access']?.toString() ?? 'edit'),
       maxChildren: (m['maxChildren'] as num?)?.toInt() ?? 5,
       used: m['used'] == true,
       createdAt: ts is Timestamp ? ts.toDate() : null,
@@ -65,10 +70,12 @@ class InvitesRepository {
   Future<String> createInvite({
     required String email,
     required int maxChildren,
+    AccessLevel access = AccessLevel.edit,
   }) async {
     final code = _genCode();
     await _col.doc(code).set({
       'email': email.trim().toLowerCase(),
+      'access': accessId(access),
       'maxChildren': maxChildren,
       'used': false,
       'createdAt': FieldValue.serverTimestamp(),

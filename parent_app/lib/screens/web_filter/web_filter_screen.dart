@@ -1,10 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../data/db.dart';
+import '../../data/site_policy_repository.dart';
 import '../../data/web_filter_repository.dart';
 import '../../models/web_filter.dart';
 import '../../theme/tokens.dart';
-import '../../widgets/dialog_buttons.dart';
+import '../../widgets/access_scope.dart';
+import '../../widgets/feedback.dart';
+import '../../widgets/read_only_banner.dart';
 
 /// Web filter editor: master safe-browsing switch, content-category toggles and
 /// a custom blocklist. Persists to Firestore when [familyId] is set.
@@ -19,18 +24,28 @@ class WebFilterScreen extends StatefulWidget {
 }
 
 class _WebFilterScreenState extends State<WebFilterScreen> {
-  bool _enabled = true;
+  // Safe browsing can't be switched off by anyone, so this is a constant — it
+  // is kept as a field only because the layout below reads it.
+  static const bool _enabled = true;
   final _categories = demoCategories();
-  final _blocked = <String>['example-badsite.com'];
-  final _keywords = <String>[];
+  final _blocked = <String>[];
   final _controller = TextEditingController();
-  final _keywordController = TextEditingController();
+  bool _canEdit = true;
+  StreamSubscription<WebPolicy>? _policySub;
 
   bool get _live => widget.familyId != null && Db.ready;
 
   @override
   void initState() {
     super.initState();
+    _policySub = SitePolicyRepository.instance.watchPolicy().listen((p) {
+      if (!mounted) return;
+      setState(() {
+        for (final c in _categories) {
+          c.blocked = p.blockedCategories.contains(c.id);
+        }
+      });
+    });
     if (_live) _load();
   }
 
@@ -39,40 +54,40 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
       final s = await WebFilterRepository.instance.load(widget.familyId!);
       if (!mounted) return;
       setState(() {
-        _enabled = s.enabled;
-        for (final c in _categories) {
-          c.blocked = s.blockedCategories.contains(c.id);
-        }
         _blocked
           ..clear()
           ..addAll(s.blockedSites);
-        _keywords
-          ..clear()
-          ..addAll(s.blockedKeywords);
       });
-    } catch (_) {
-      // keep defaults
+    } catch (e) {
+      // Showing an empty list as if it were the saved one would tell the parent
+      // nothing is blocked, so say the list couldn't be read.
+      if (mounted) context.showError('Couldn’t load the blocklist', e);
     }
   }
 
-  void _persist() {
-    if (!_live) return;
-    WebFilterRepository.instance.save(
-      widget.familyId!,
-      WebFilterSettings(
-        enabled: _enabled,
-        blockedCategories:
-            _categories.where((c) => c.blocked).map((c) => c.id).toSet(),
-        blockedSites: List<String>.from(_blocked),
-        blockedKeywords: List<String>.from(_keywords),
-      ),
-    );
+  /// Saves the blocklist, undoing [revert] if the write is rejected so the
+  /// chips on screen always reflect what the child device will actually get.
+  Future<void> _persist(VoidCallback revert) async {
+    if (!_live || !_canEdit) return;
+    try {
+      await WebFilterRepository.instance.save(
+        widget.familyId!,
+        WebFilterSettings(
+          enabled: _enabled,
+          blockedSites: List<String>.from(_blocked),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(revert);
+      context.showError('Couldn’t save the blocklist', e);
+    }
   }
 
   @override
   void dispose() {
     _controller.dispose();
-    _keywordController.dispose();
+    _policySub?.cancel();
     super.dispose();
   }
 
@@ -92,62 +107,14 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
     }
     if (!_blocked.contains(host)) {
       setState(() => _blocked.insert(0, host));
-      _persist();
+      _persist(() => _blocked.remove(host));
     }
     _controller.clear();
   }
 
-  void _addKeyword() {
-    final word = _keywordController.text.trim().toLowerCase();
-    if (word.isEmpty) return;
-    if (word.length < 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Use at least 3 characters.')),
-      );
-      return;
-    }
-    if (!_keywords.contains(word)) {
-      setState(() => _keywords.insert(0, word));
-      _persist();
-    }
-    _keywordController.clear();
-  }
-
-  Future<void> _toggleSafeBrowsing(bool v) async {
-    if (!v) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Turn off safe browsing?'),
-          content: const Text(
-            'No websites will be blocked for your child — they\u2019ll be able '
-            'to visit any site, including unsafe ones. Are you sure?',
-          ),
-          actions: [
-            DialogCancelButton(onPressed: () => Navigator.pop(ctx, false)),
-            DialogConfirmButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              label: 'Turn off',
-              color: AppColors.danger,
-            ),
-          ],
-        ),
-      );
-      if (ok != true) return; // keep it on
-    }
-    setState(() {
-      _enabled = v;
-      // On -> block all categories; off -> clear every category so nothing is
-      // blocked.
-      for (final c in _categories) {
-        c.blocked = v;
-      }
-    });
-    _persist();
-  }
-
   @override
   Widget build(BuildContext context) {
+    _canEdit = AccessScope.of(context);
     final title = widget.childName == null
         ? 'Web filter'
         : 'Web filter · ${widget.childName}';
@@ -157,12 +124,13 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
         children: [
+          if (!_canEdit) const ReadOnlyBanner(),
           Card(
             color: _enabled ? AppColors.success.withValues(alpha: 0.06) : null,
-            child: SwitchListTile(
+            child: ListTile(
               contentPadding: const EdgeInsets.symmetric(
                   horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-              secondary: Container(
+              leading: Container(
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
@@ -173,9 +141,9 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
               ),
               title: const Text('Safe browsing',
                   style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text('Filter unsafe sites and enforce SafeSearch.'),
-              value: _enabled,
-              onChanged: _toggleSafeBrowsing,
+              subtitle: const Text('Always on · cannot be turned off'),
+              trailing: const Icon(Icons.lock_outline_rounded,
+                  color: AppColors.textMuted, size: 18),
             ),
           ),
           const SizedBox(height: AppSpacing.sm),
@@ -213,33 +181,38 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
+          // Blocked categories are managed globally by the site admin — shown
+          // read-only so an org admin can't turn any protection off.
+          Text('Blocked categories',
+              style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          Text('Managed by your administrator.',
+              style: TextStyle(
+                  color: AppColors.textSecondaryOf(context), fontSize: 13)),
+          const SizedBox(height: AppSpacing.sm),
           Opacity(
             opacity: _enabled ? 1 : 0.5,
+            child: Card(
+              child: Column(
+                children: [
+                  for (var i = 0; i < _categories.length; i++) ...[
+                    if (i > 0) const Divider(height: 1, indent: 64),
+                    _CategoryTile(category: _categories[i]),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.lg),
+          // Custom blocklist — org admins may add their own sites (this only
+          // adds protection, never removes it).
+          Opacity(
+            opacity: (_enabled && _canEdit) ? 1 : 0.5,
             child: IgnorePointer(
-              ignoring: !_enabled,
+              ignoring: !_enabled || !_canEdit,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Blocked categories',
-                      style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: AppSpacing.sm),
-                  Card(
-                    child: Column(
-                      children: [
-                        for (var i = 0; i < _categories.length; i++) ...[
-                          if (i > 0) const Divider(height: 1, indent: 64),
-                          _CategoryTile(
-                            category: _categories[i],
-                            onChanged: (v) {
-                              setState(() => _categories[i].blocked = v);
-                              _persist();
-                            },
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.lg),
                   Text('Custom blocklist',
                       style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: AppSpacing.sm),
@@ -278,8 +251,9 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
                                   Chip(
                                     label: Text(site),
                                     onDeleted: () {
+                                      final at = _blocked.indexOf(site);
                                       setState(() => _blocked.remove(site));
-                                      _persist();
+                                      _persist(() => _blocked.insert(at, site));
                                     },
                                     deleteIcon:
                                         const Icon(Icons.close, size: 16),
@@ -295,62 +269,6 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
               ),
             ),
           ),
-          const SizedBox(height: AppSpacing.lg),
-          Text('Blocked words (page content)',
-              style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 4),
-          const Text(
-            'Pages whose visible text contains these words are blocked — even '
-            'on new sites. Always on.',
-            style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-          ),
-          const SizedBox(height: AppSpacing.sm),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _keywordController,
-                          onSubmitted: (_) => _addKeyword(),
-                          decoration: const InputDecoration(
-                            hintText: 'Add a word to block',
-                            prefixIcon: Icon(Icons.text_fields_rounded),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: AppSpacing.sm),
-                      IconButton.filled(
-                        onPressed: _addKeyword,
-                        icon: const Icon(Icons.add),
-                      ),
-                    ],
-                  ),
-                  if (_keywords.isNotEmpty) ...[
-                    const SizedBox(height: AppSpacing.md),
-                    Wrap(
-                      spacing: AppSpacing.sm,
-                      runSpacing: AppSpacing.sm,
-                      children: [
-                        for (final w in _keywords)
-                          Chip(
-                            label: Text(w),
-                            onDeleted: () {
-                              setState(() => _keywords.remove(w));
-                              _persist();
-                            },
-                            deleteIcon: const Icon(Icons.close, size: 16),
-                          ),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -358,16 +276,16 @@ class _WebFilterScreenState extends State<WebFilterScreen> {
 }
 
 class _CategoryTile extends StatelessWidget {
-  const _CategoryTile({required this.category, required this.onChanged});
+  const _CategoryTile({required this.category});
   final WebCategory category;
-  final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return SwitchListTile(
+    final blocked = category.blocked;
+    return ListTile(
       contentPadding: const EdgeInsets.symmetric(
           horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-      secondary: Container(
+      leading: Container(
         width: 40,
         height: 40,
         decoration: BoxDecoration(
@@ -379,8 +297,22 @@ class _CategoryTile extends StatelessWidget {
       title: Text(category.name,
           style: const TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Text(category.description),
-      value: category.blocked,
-      onChanged: onChanged,
+      trailing: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: (blocked ? AppColors.danger : AppColors.textMuted)
+              .withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          blocked ? 'Blocked' : 'Allowed',
+          style: TextStyle(
+            color: blocked ? AppColors.danger : AppColors.textMuted,
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
     );
   }
 }

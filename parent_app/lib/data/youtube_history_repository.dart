@@ -7,22 +7,27 @@ class YoutubeVideo {
   final DateTime? at;
   final int watchedSeconds;
 
+  /// The video's full length, when the child device could read it. 0 when not
+  /// known, which is why watch time is never shown as a fraction of it.
+  final int durationSeconds;
+
   const YoutubeVideo({
     required this.title,
     this.channel = '',
     this.at,
     this.watchedSeconds = 0,
+    this.durationSeconds = 0,
   });
 
-  /// Opens YouTube searching for this exact video (we can't read the app's
-  /// internal video id, so an exact-phrase title + channel search puts it on
-  /// top of the results).
+  /// Opens YouTube searching for this video's title. Quoting it as an exact
+  /// phrase found nothing whenever the captured title differed from the real
+  /// one by a character, so the words are searched as they were read.
   String get searchUrl {
     final clean = title
-        .replaceAll(RegExp(r'[|]+'), ' ')
+        .replaceAll(RegExp(r'["|]+'), ' ')
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
-    final q = channel.isEmpty ? '"$clean"' : '"$clean" $channel';
+    final q = channel.isEmpty ? clean : '$clean $channel';
     return 'https://www.youtube.com/results?search_query='
         '${Uri.encodeQueryComponent(q)}';
   }
@@ -34,42 +39,42 @@ class YoutubeHistoryRepository {
   YoutubeHistoryRepository._();
   static final instance = YoutubeHistoryRepository._();
 
-  Stream<List<YoutubeVideo>> watch(String familyId, String childId) {
-    return Db.families
-        .doc(familyId)
-        .collection('children')
-        .doc(childId)
-        .collection('youtubeHistory')
-        .doc('current')
-        .snapshots()
-        .map((doc) {
-      final data = doc.data();
-      if (data == null) return const <YoutubeVideo>[];
-      final raw = ((data['videos'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((m) => YoutubeVideo(
-                title: (m['title'] ?? '').toString(),
-                channel: (m['channel'] ?? '').toString(),
-                at: (m['at'] is num)
-                    ? DateTime.fromMillisecondsSinceEpoch((m['at'] as num).toInt())
-                    : null,
-                watchedSeconds: (m['watchedMs'] is num)
-                    ? ((m['watchedMs'] as num).toInt() / 1000).round()
-                    : 0,
-              ))
-          .where((v) => v.title.isNotEmpty)
-          .toList();
-      return _mergeByTitle(raw);
-    });
+  Stream<List<YoutubeVideo>> watch(String familyId, String childId,
+      {String? deviceId}) {
+    return Db.watchReportArray<YoutubeVideo>(
+      deviceId: deviceId,
+      familyId: familyId,
+      childId: childId,
+      collection: 'youtubeHistory',
+      field: 'videos',
+      parse: (m) {
+        final title = (m['title'] ?? '').toString();
+        if (title.isEmpty) return null;
+        return YoutubeVideo(
+          title: title,
+          channel: (m['channel'] ?? '').toString(),
+          at: Db.millis(m['at']),
+          watchedSeconds: (m['watchedMs'] is num)
+              ? ((m['watchedMs'] as num).toInt() / 1000).round()
+              : 0,
+          durationSeconds: (m['durationMs'] is num)
+              ? ((m['durationMs'] as num).toInt() / 1000).round()
+              : 0,
+        );
+      },
+    ).map(_merge);
   }
 
-  /// Collapses duplicate videos (same title) into one, summing watch time and
-  /// keeping the most recent timestamp — a safety net over the child's dedup.
-  List<YoutubeVideo> _mergeByTitle(List<YoutubeVideo> videos) {
-    String key(String t) => t.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+  /// Collapses repeat entries for one video, summing watch time and keeping the
+  /// most recent timestamp. Keyed on title *and* channel: two different videos
+  /// can share a title, and merging on title alone hid one behind the other.
+  List<YoutubeVideo> _merge(List<YoutubeVideo> videos) {
+    String key(YoutubeVideo v) =>
+        '${v.title.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim()}'
+        '|${v.channel.toLowerCase().trim()}';
     final byKey = <String, YoutubeVideo>{};
     for (final v in videos) {
-      final k = key(v.title);
+      final k = key(v);
       final prev = byKey[k];
       if (prev == null) {
         byKey[k] = v;
@@ -83,6 +88,8 @@ class YoutubeHistoryRepository {
           channel: newer.channel.isNotEmpty ? newer.channel : prev.channel,
           at: newer.at,
           watchedSeconds: prev.watchedSeconds + v.watchedSeconds,
+          durationSeconds:
+              newer.durationSeconds > 0 ? newer.durationSeconds : prev.durationSeconds,
         );
       }
     }

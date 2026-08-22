@@ -20,7 +20,7 @@ class FirebaseBootstrap {
       isReady = true;
     } catch (e) {
       isReady = false;
-      debugPrint('GuardNest: Firebase not connected yet — running in demo mode. ($e)');
+      debugPrint('Maryada: Firebase not connected yet — running in demo mode. ($e)');
     }
   }
 }

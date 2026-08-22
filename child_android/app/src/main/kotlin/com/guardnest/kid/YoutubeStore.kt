@@ -13,8 +13,9 @@ import org.json.JSONObject
 object YoutubeStore {
 
     data class Video(
-        val title: String,
+        var title: String,
         var channel: String,
+        var durationMs: Long,
         var at: Long,
         var watchedMs: Long,
     )
@@ -23,9 +24,14 @@ object YoutubeStore {
     private const val RETAIN_MS = 31L * 24 * 60 * 60 * 1000 // ~1 month
     private const val FILE = "youtube_history.json"
 
+    /** A video only counts as "watched" after this much accumulated play time —
+     *  opening one and backing straight out shouldn't put it in the history. */
+    private const val MIN_WATCHED_MS = 20_000L
+
     private val lock = Any()
-    // Keyed by lowercased title so repeat views of the same video accumulate
-    // watch time instead of creating duplicates.
+    // Keyed by title + channel + duration. Title alone merged different videos
+    // that happened to share a name, and split one video whose title was shown
+    // truncated in the feed but in full on the watch page.
     private val videos = LinkedHashMap<String, Video>()
 
     @Volatile private var dirty = false
@@ -44,23 +50,41 @@ object YoutubeStore {
      * Records that [title] is on screen. [addMs] is the watch time to add since
      * the previous capture of the same video (0 when a new video just started).
      */
-    fun record(title: String, channel: String, addMs: Long = 0L) {
+    fun record(
+        title: String,
+        channel: String,
+        durationMs: Long = 0L,
+        addMs: Long = 0L,
+    ) {
         val t = title.trim()
         if (t.length < 2) return
-        val key = normalizeKey(t)
+        val ch = channel.trim()
+        val key = keyOf(t, ch, durationMs)
         val now = System.currentTimeMillis()
         synchronized(lock) {
             val existing = videos[key]
             if (existing == null) {
-                videos[key] = Video(t, channel.trim(), now, addMs.coerceAtLeast(0L))
+                videos[key] = Video(t, ch, durationMs, now, addMs.coerceAtLeast(0L))
             } else {
-                if (channel.isNotBlank()) existing.channel = channel.trim()
+                if (ch.isNotBlank()) existing.channel = ch
+                if (durationMs > 0L) existing.durationMs = durationMs
+                // Screens truncate titles; keep the fullest one we've seen.
+                if (t.length > existing.title.length) existing.title = t
                 existing.at = now
                 if (addMs > 0L) existing.watchedMs += addMs
             }
             pruneLocked(now)
             dirty = true
         }
+    }
+
+    /**
+     * Identity of a video. Duration separates same-titled videos, and is
+     * bucketed to a second because sources report it slightly differently.
+     */
+    private fun keyOf(title: String, channel: String, durationMs: Long): String {
+        val bucket = if (durationMs > 0L) (durationMs / 1000).toString() else ""
+        return "${normalizeKey(title)}|${channel.lowercase()}|$bucket"
     }
 
     /** Collapses whitespace and trailing "…more"/ellipsis so the same video —
@@ -91,19 +115,35 @@ object YoutubeStore {
 
     fun hasChanges(): Boolean = dirty
 
+    /** Empties the store after a server-side wipe, so the next flush doesn't
+     *  resurrect the deleted history from this device's local copy. */
+    fun clearAll() {
+        synchronized(lock) {
+            videos.clear()
+            dirty = false
+            save()
+        }
+    }
+
     fun snapshot(): List<Map<String, Any>> {
         synchronized(lock) {
             pruneLocked(System.currentTimeMillis())
             dirty = false
             save()
-            return videos.values.sortedByDescending { it.at }.map {
-                mapOf(
-                    "title" to it.title,
-                    "channel" to it.channel,
-                    "at" to it.at,
-                    "watchedMs" to it.watchedMs,
-                )
-            }
+            // Sub-threshold entries stay buffered (their time keeps accruing);
+            // they just don't ship until the child has genuinely watched.
+            return videos.values
+                .filter { it.watchedMs >= MIN_WATCHED_MS }
+                .sortedByDescending { it.at }
+                .map {
+                    mapOf(
+                        "title" to it.title,
+                        "channel" to it.channel,
+                        "durationMs" to it.durationMs,
+                        "at" to it.at,
+                        "watchedMs" to it.watchedMs,
+                    )
+                }
         }
     }
 
@@ -118,6 +158,7 @@ object YoutubeStore {
                     JSONObject()
                         .put("title", v.title)
                         .put("channel", v.channel)
+                        .put("durationMs", v.durationMs)
                         .put("at", v.at)
                         .put("watchedMs", v.watchedMs)
                 )
@@ -143,9 +184,12 @@ object YoutubeStore {
                 if (at < cutoff) continue
                 val title = o.optString("title")
                 if (title.length < 2) continue
-                videos[normalizeKey(title)] = Video(
+                val channel = o.optString("channel")
+                val durationMs = o.optLong("durationMs")
+                videos[keyOf(title, channel, durationMs)] = Video(
                     title,
-                    o.optString("channel"),
+                    channel,
+                    durationMs,
                     at,
                     o.optLong("watchedMs"),
                 )

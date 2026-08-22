@@ -119,7 +119,7 @@ class WebFilterVpnService : VpnService() {
                 val cats = (snap.get("blockedCategories") as? List<*>)
                     ?.mapNotNull { it as? String }
                     ?: emptyList()
-                val fromCats = cats.flatMap { CATEGORY_DOMAINS[it] ?: emptyList() }
+                val fromCats = cats.flatMap { WebFilter.CATEGORY_SEEDS[it] ?: emptyList() }
                 blockedDomains = (sites + fromCats).toSet()
                 enabledCategories = cats.toSet()
                 // Fetch/refresh the live per-category blocklists for runtime
@@ -228,7 +228,7 @@ class WebFilterVpnService : VpnService() {
             // in a browser — otherwise background app/ad traffic that happens to
             // match a category would show as sites they never tried to visit.
             if (blocked && ForegroundApp.isBrowserForeground()) {
-                WebHistoryStore.recordBlocked(domain)
+                WebHistoryStore.recordBlocked(domain, reasonFor(domain))
                 AlertLog.log(
                     this, "blockedWebsite", "Blocked $domain",
                     throttleKey = "site:$domain",
@@ -252,6 +252,14 @@ class WebFilterVpnService : VpnService() {
         if (blockedDomains.any { d == it || d.endsWith(".$it") }) return true
         // Runtime category decision from the live per-category feed.
         return CategoryFeed.isBlocked(d, enabledCategories)
+    }
+
+    /** Which category blocked [domain], for the parent's activity tag. */
+    private fun reasonFor(domain: String): String {
+        val d = domain.lowercase().removePrefix("www.")
+        return CategoryFeed.categoryOf(d, enabledCategories)
+            ?: WebFilter.categoryHint(d)
+            ?: WebFilter.REASON_BLOCKLIST
     }
 
     private fun parseDomain(dns: ByteArray): String? {
@@ -350,24 +358,5 @@ class WebFilterVpnService : VpnService() {
                 Intent(ctx, WebFilterVpnService::class.java).setAction(ACTION_STOP)
             )
         }
-
-        // Small representative domain sets per category (a real product uses a
-        // categorization feed; these keep the feature testable).
-        private val CATEGORY_DOMAINS: Map<String, List<String>> = mapOf(
-            "adult" to listOf(
-                "pornhub.com", "xvideos.com", "xnxx.com", "xhamster.com",
-                "redtube.com", "youporn.com",
-            ),
-            "gambling" to listOf(
-                "bet365.com", "pokerstars.com", "williamhill.com", "888casino.com",
-            ),
-            "social" to listOf(
-                "facebook.com", "instagram.com", "twitter.com", "x.com",
-                "tiktok.com", "snapchat.com",
-            ),
-            "drugs" to listOf("leafly.com", "weedmaps.com"),
-            "weapons" to listOf("armslist.com"),
-            "violence" to listOf("liveleak.com"),
-        )
     }
 }

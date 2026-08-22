@@ -7,11 +7,13 @@ import '../../models/app_user.dart';
 import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feedback.dart';
+import '../../widgets/typed_danger_dialog.dart';
 import '../../widgets/dialog_buttons.dart';
 import '../../widgets/status_pill.dart';
 
-/// Admin read-only view of a single host: their child limit / status controls
-/// plus the families and children they manage.
+/// Admin view of a single parent (org admin): their access, child limit and
+/// status controls, plus the families and children they manage.
 class HostDetailScreen extends StatelessWidget {
   const HostDetailScreen({super.key, required this.host});
 
@@ -21,7 +23,7 @@ class HostDetailScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Host')),
+      appBar: AppBar(title: const Text('Parent')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
@@ -36,15 +38,32 @@ class HostDetailScreen extends StatelessWidget {
                 ListTile(
                   contentPadding: const EdgeInsets.symmetric(
                       horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-                  leading: const Icon(Icons.tune_rounded,
+                  leading: const Icon(Icons.shield_outlined,
                       color: AppColors.primary),
-                  title: const Text('Child limit',
+                  title: const Text('Access',
                       style: TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: Text('Currently ${host.maxChildren}'),
+                  subtitle: Text(host.access == AccessLevel.edit
+                      ? 'Edit — can add children & change rules'
+                      : 'View only — read-only'),
                   trailing: const Icon(Icons.chevron_right_rounded,
                       color: AppColors.textMuted),
-                  onTap: () => _editLimit(context),
+                  onTap: () => _editAccess(context),
                 ),
+                if (host.access == AccessLevel.edit) ...[
+                  const Divider(height: 1, indent: 56),
+                  ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+                    leading: const Icon(Icons.tune_rounded,
+                        color: AppColors.primary),
+                    title: const Text('Child limit',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text('Currently ${host.maxChildren}'),
+                    trailing: const Icon(Icons.chevron_right_rounded,
+                        color: AppColors.textMuted),
+                    onTap: () => _editLimit(context),
+                  ),
+                ],
                 const Divider(height: 1, indent: 56),
                 SwitchListTile(
                   contentPadding: const EdgeInsets.symmetric(
@@ -67,9 +86,81 @@ class HostDetailScreen extends StatelessWidget {
           Text('Families & children', style: theme.textTheme.titleMedium),
           const SizedBox(height: AppSpacing.sm),
           _Families(hostUid: host.uid),
+          const SizedBox(height: AppSpacing.lg),
+          OutlinedButton.icon(
+            onPressed: () => _confirmRemove(context),
+            icon: const Icon(Icons.person_remove_rounded,
+                color: AppColors.danger),
+            label: const Text('Remove parent',
+                style: TextStyle(color: AppColors.danger)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: AppColors.danger),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _confirmRemove(BuildContext context) async {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => TypedDangerDialog(
+        title: 'Remove this parent?',
+        warning:
+            'This removes ${host.email}’s access. They’ll be blocked until '
+            'you grant access again. Their families and profiles are not '
+            'deleted.',
+        prompt: 'Type their email address to confirm:',
+        expected: host.email,
+        actionLabel: 'Remove',
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await HostsRepository.instance.delete(host.uid);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Couldn’t remove — ${friendlyError(e)}')),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(content: Text('${host.email} was removed.')),
+    );
+    navigator.pop();
+  }
+
+  Future<void> _editAccess(BuildContext context) async {
+    final choice = await showDialog<AccessLevel>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Set access'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, AccessLevel.edit),
+            child: const ListTile(
+              leading: Icon(Icons.edit_outlined),
+              title: Text('Edit'),
+              subtitle: Text('Add children and change rules'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, AccessLevel.view),
+            child: const ListTile(
+              leading: Icon(Icons.visibility_outlined),
+              title: Text('View only'),
+              subtitle: Text('Read-only access'),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (choice != null) {
+      await HostsRepository.instance.setAccess(host.uid, choice);
+    }
   }
 
   Future<void> _editLimit(BuildContext context) async {
@@ -168,12 +259,13 @@ class _Families extends StatelessWidget {
         }
         final families = snap.data ?? const <FamilyModel>[];
         if (families.isEmpty) {
-          return const Card(
+          return Card(
             child: Padding(
-              padding: EdgeInsets.all(AppSpacing.lg),
+              padding: const EdgeInsets.all(AppSpacing.lg),
               child: Center(
-                child: Text('This host has no family yet.',
-                    style: TextStyle(color: AppColors.textSecondary)),
+                child: Text('This parent has no family yet.',
+                    style: TextStyle(
+                        color: AppColors.textSecondaryOf(context))),
               ),
             ),
           );

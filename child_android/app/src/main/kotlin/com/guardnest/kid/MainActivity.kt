@@ -119,7 +119,6 @@ class MainActivity : Activity() {
     private lateinit var linkLabel: TextView
     private lateinit var linkProgress: ProgressBar
     private var linking = false
-    private lateinit var unlinkButton: TextView
     private var unlinking = false
     private var tempAccessBtn: TextView? = null
 
@@ -136,6 +135,8 @@ class MainActivity : Activity() {
         uiHandler.removeCallbacks(grantPoll)
         // Re-check after returning from any system settings/consent screen.
         render()
+        // Clears the banking-mode notice the moment the last permission is back.
+        TempAccessNotice.sync(this)
         wasPaired = ChildStore.isPaired(this)
         uiHandler.removeCallbacks(pairingWatch)
         uiHandler.postDelayed(pairingWatch, 1000)
@@ -171,6 +172,15 @@ class MainActivity : Activity() {
                     removalWatch?.remove()
                     removalWatch = null
                     render()
+                } else if (snap != null && snap.exists()) {
+                    // Keep the family name fresh from this device's own child doc
+                    // (the parent stamps it there — the child can't read the
+                    // family root doc directly).
+                    val name = snap.getString("familyName")?.trim()
+                    if (!name.isNullOrEmpty() && name != ChildStore.familyName(this)) {
+                        ChildStore.setFamilyName(this, name)
+                        if (permissionsComplete()) refreshStatus()
+                    }
                 }
             }
     }
@@ -248,28 +258,56 @@ class MainActivity : Activity() {
             body.addView(buildSetupGate())
         } else {
             body.addView(buildStatusCard())
+            if (ChildStore.isPaired(this)) {
+                buildUsageCard()?.let {
+                    body.addView(gap(dp(16)))
+                    body.addView(it)
+                }
+            }
             body.addView(gap(dp(16)))
             body.addView(buildPairingCard())
             if (ChildStore.isPaired(this)) {
                 body.addView(gap(dp(12)))
                 body.addView(buildTemporaryAccessButton())
             }
-            // Flexible spacer pushes the unlink button to the very bottom.
-            body.addView(View(this).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-                )
-            })
-            body.addView(gap(dp(12)))
-            body.addView(buildUnlinkButton())
         }
 
         root.addView(body)
+
+        root.addView(buildVersionFooter())
 
         return ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(cBg)
             addView(root)
+        }
+    }
+
+    /** The installed app version, e.g. "Version 1.0.1 (2)". */
+    private fun versionLabel(): String {
+        return try {
+            val info = packageManager.getPackageInfo(packageName, 0)
+            val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                info.longVersionCode
+            } else {
+                @Suppress("DEPRECATION") info.versionCode.toLong()
+            }
+            "Version ${info.versionName} (${code})"
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    /** Credit line pinned at the very bottom of the screen. */
+    private fun buildVersionFooter(): View {
+        return TextView(this).apply {
+            text = "An Initiative by ISKCON Brahmapur"
+            textSize = 12f
+            setTextColor(cMuted)
+            gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            setBackgroundColor(cBg)
+            setPadding(dp(16), dp(4), dp(16), dp(16))
         }
     }
 
@@ -313,7 +351,7 @@ class MainActivity : Activity() {
                 typeface = Typeface.DEFAULT_BOLD
             })
             addView(TextView(this@MainActivity).apply {
-                text = "Family protection"
+                text = versionLabel()
                 setTextColor(Color.parseColor("#E0E7FF"))
                 textSize = 13f
             })
@@ -335,6 +373,20 @@ class MainActivity : Activity() {
                 )
                 recreate()
             }
+        })
+
+        // Everything the child rarely needs (uninstall) hides behind this.
+        header.addView(TextView(this).apply {
+            text = "\u22EE"
+            textSize = 20f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            val size = dp(36)
+            layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                leftMargin = dp(4)
+            }
+            isClickable = true
+            setOnClickListener { showMoreMenu() }
         })
 
         return header
@@ -372,6 +424,8 @@ class MainActivity : Activity() {
         ) ?: return false
         return enabled.split(':').any { it.equals(cn, ignoreCase = true) }
     }
+
+    private fun hasNotificationAccess() = Permissions.hasNotificationAccess(this)
 
     private fun permissionsComplete(): Boolean = Permissions.allGranted(this)
 
@@ -413,6 +467,12 @@ class MainActivity : Activity() {
             "Activate device admin so Maryada can’t be removed without a parent.",
             hasDeviceAdmin()
         ) { grantDeviceAdmin() })
+        col.addView(gap(dp(10)))
+        col.addView(permissionRow(
+            "\uD83D\uDD14", "Notification access",
+            "Allow Notification access so your family sees more complete activity.",
+            hasNotificationAccess()
+        ) { grantNotificationAccess() })
 
         col.addView(gap(dp(16)))
         col.addView(TextView(this).apply {
@@ -530,6 +590,33 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Opens the Notification access screen so the child can enable the YouTube
+     *  media-session capture. Deep-links straight to our app on Android 11+. */
+    private fun grantNotificationAccess() {
+        val comp = android.content.ComponentName(
+            this, GuardNestNotificationListener::class.java
+        )
+        try {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                    .putExtra(
+                        Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
+                        comp.flattenToString(),
+                    )
+            } else {
+                Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+            }
+            startActivity(intent)
+            armGrantWatch { hasNotificationAccess() }
+        } catch (_: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                armGrantWatch { hasNotificationAccess() }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
     private fun grantOverlay() {
         try {
             startActivity(
@@ -628,6 +715,96 @@ class MainActivity : Activity() {
 
         statusCard.addView(row)
         return statusCard
+    }
+
+    /**
+     * Today's screen time for this device: a big total plus a short list of the
+     * most-used apps with a proportional bar. Returns null when usage access
+     * isn't granted or there's nothing to show yet.
+     */
+    private fun buildUsageCard(): View? {
+        val (total, apps) = UsageReporter.today(this) ?: return null
+        if (apps.isEmpty()) return null
+
+        val c = card()
+        c.addView(TextView(this).apply {
+            text = "Screen time today"
+            textSize = 16f
+            setTextColor(cInk)
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        c.addView(TextView(this).apply {
+            text = fmtDuration(total)
+            textSize = 26f
+            setTextColor(cPrimary)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(0, dp(2), 0, dp(12))
+        })
+
+        val maxMin = (apps.maxOfOrNull { it.minutes } ?: 1).coerceAtLeast(1)
+        for (app in apps) c.addView(buildUsageRow(app.label, app.minutes, maxMin))
+        return c
+    }
+
+    /** One app row: name, its time, and a proportional progress bar. */
+    private fun buildUsageRow(label: String, minutes: Int, maxMin: Int): View {
+        val wrap = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(7), 0, dp(7))
+        }
+
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        top.addView(TextView(this).apply {
+            text = label
+            textSize = 14f
+            setTextColor(cInk)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        top.addView(TextView(this).apply {
+            text = fmtDuration(minutes)
+            textSize = 13f
+            setTextColor(cMuted)
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(dp(8), 0, 0, 0)
+        })
+        wrap.addView(top)
+
+        val filled = minutes.coerceAtLeast(0)
+        val rest = (maxMin - filled).coerceAtLeast(0)
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(dk("#ECEBFB", "#2A2540"), dp(4), Color.TRANSPARENT, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(6)
+            ).apply { topMargin = dp(6) }
+        }
+        bar.addView(View(this).apply {
+            background = rounded(cPrimary, dp(4), Color.TRANSPARENT, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT,
+                filled.toFloat().coerceAtLeast(0.001f)
+            )
+        })
+        if (rest > 0) bar.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, rest.toFloat()
+            )
+        })
+        wrap.addView(bar)
+        return wrap
+    }
+
+    /** "45m", "1h", "2h 15m". */
+    private fun fmtDuration(minutes: Int): String {
+        if (minutes < 60) return "${minutes}m"
+        val h = minutes / 60
+        val m = minutes % 60
+        return if (m == 0) "${h}h" else "${h}h ${m}m"
     }
 
     private fun buildPairingCard(): View {
@@ -755,8 +932,9 @@ class MainActivity : Activity() {
         tempAccessBtn = btn
         col.addView(btn)
         col.addView(TextView(this).apply {
-            text = "Use a banking app for a while. All other apps stay locked " +
-                "until protection is turned back on."
+            text = "Turns off monitoring so you can use a banking app. Every " +
+                "other app stays locked and the app still can’t be removed. " +
+                "Turn Maryada’s Accessibility back on to restore protection."
             textSize = 12f
             setTextColor(cMuted)
             gravity = Gravity.CENTER
@@ -766,8 +944,11 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Confirms, then turns off the accessibility service. The device drops into
-     * banking mode (lockbox) — only the parent's allow-list stays usable.
+     * Confirms, then turns off the accessibility service — the one protection
+     * banking apps refuse to run alongside — while keeping device admin so the
+     * app still can't be uninstalled. The device drops into banking mode
+     * (lockbox): only the parent's allow-list stays usable. Turning
+     * accessibility back on restores everything.
      */
     private fun onTemporaryAccess() {
         android.app.AlertDialog.Builder(
@@ -775,10 +956,12 @@ class MainActivity : Activity() {
         )
             .setTitle("Turn off monitoring?")
             .setMessage(
-                "Temporary Access turns off app monitoring so you can use a " +
-                    "banking app.\n\nEvery other app will be locked until you " +
-                    "turn Maryada’s Accessibility back on in Settings.\n\n" +
-                    "Are you sure you want to continue?"
+                "Temporary Access turns off Maryada’s accessibility service so " +
+                    "a banking app will run.\n\nYour device stays locked to your " +
+                    "parent’s allowed apps, and Maryada still can’t be " +
+                    "uninstalled.\n\nTo restore full protection, turn Maryada’s " +
+                    "Accessibility back on in Settings.\n\nAre you sure you want " +
+                    "to continue?"
             )
             .setCancelable(false)
             .setPositiveButton("Yes, turn off") { _, _ ->
@@ -789,6 +972,14 @@ class MainActivity : Activity() {
                     alpha = 0.6f
                     text = "Temporary access on…"
                 }
+                // Remember this was intentional so the enforcement service can
+                // restore protection once it returns.
+                ChildStore.setTempAccess(this, true)
+                TempAccessNotice.begin(this)
+                // Accessibility is the only thing banking apps object to, so it
+                // is the only protection this turns off — notification access
+                // and call/SMS access stay exactly as the child granted them.
+                WebFilterVpnService.stop(this)
                 // Turn off accessibility in the background.
                 if (!AccessibilityController.disable()) {
                     // Fallback: open the accessibility screen to toggle it off.
@@ -806,29 +997,26 @@ class MainActivity : Activity() {
     }
 
     /**
-     * The "Unlink this device" button. Unlinking is only allowed once the parent
-     * has removed this device from their family — otherwise it stays protected.
+     * The tucked-away options: only uninstalling lives here, so the front screen
+     * stays about status and Temporary Access.
      */
-    private fun buildUnlinkButton(): View {
-        unlinking = false
-        val btn = TextView(this).apply {
-            text = "Unlink this device"
-            textSize = 14f
-            setTextColor(cDanger)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(14), dp(16), dp(14))
-            background = rounded(dk("#FEF2F2", "#3A1F22"), dp(12), cDanger, dp(1))
-            isClickable = true
-            setOnClickListener { unlinkIfRemoved() }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            visibility = if (ChildStore.isPaired(this@MainActivity)) View.VISIBLE else View.GONE
+    private fun showMoreMenu() {
+        if (!ChildStore.isPaired(this)) {
+            toast("This device isn’t linked yet.")
+            return
         }
-        unlinkButton = btn
-        return btn
+        android.app.AlertDialog.Builder(
+            this, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
+        )
+            .setTitle("Uninstall this app?")
+            .setMessage(
+                "Maryada can only be removed after your parent removes this " +
+                    "device from the family. Tap Check to see whether that has " +
+                    "been done."
+            )
+            .setPositiveButton("Check") { _, _ -> unlinkIfRemoved() }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     /**
@@ -845,9 +1033,7 @@ class MainActivity : Activity() {
             return
         }
         unlinking = true
-        unlinkButton.isEnabled = false
-        unlinkButton.alpha = 0.6f
-        unlinkButton.text = "Checking\u2026"
+        toast("Checking…")
         FirebaseFirestore.getInstance()
             .collection("families").document(fid)
             .collection("children").document(cid)
@@ -857,10 +1043,7 @@ class MainActivity : Activity() {
                 if (!doc.exists()) {
                     performLocalUnlink()
                 } else {
-                    unlinkButton.isEnabled = true
-                    unlinkButton.alpha = 1f
-                    unlinkButton.text = "Unlink this device"
-                    toast("This device is still linked. Ask your parent to remove it from their family first.")
+                    toast("Hare Krishna, Kindly contact your Admin for this. Thanks")
                 }
             }
             .addOnFailureListener {
@@ -880,7 +1063,7 @@ class MainActivity : Activity() {
         }
         removalWatch?.remove()
         removalWatch = null
-        toast("Device unlinked. You can uninstall the app now.")
+        toast("Device disconnected. You can uninstall the app now.")
         render()
     }
 
@@ -889,28 +1072,27 @@ class MainActivity : Activity() {
     private fun refreshStatus() {
         val owner = DeviceLockdown.isDeviceOwner(this)
         val paired = ChildStore.isPaired(this)
+        // The family's name adds nothing here and only dates the screen when a
+        // parent renames it.
+        val familyLine = "Connected to your family."
 
         when {
             paired && owner -> setStatus(
                 "\u2713", cAccent, dk("#DCFCE7", "#173a25"),
-                "Protected", "This device is linked and safeguarded."
+                "Protected", familyLine
             )
             paired -> setStatus(
                 "\u2713", cPrimary, dk("#ECEBFB", "#2A2540"),
-                "Linked", "Connected to your family. Protection pending setup."
+                "Connected", familyLine
             )
             else -> setStatus(
                 "!", Color.parseColor("#F59E0B"), dk("#FEF3C7", "#3a2f14"),
-                "Not linked yet", "Enter a pairing code below to get started."
+                "Not connected yet", "Enter a pairing code below to get started."
             )
         }
 
         // Hide the pairing card once linked.
         pairingCard.visibility = if (paired) View.GONE else View.VISIBLE
-        // The unlink option only shows while linked.
-        if (::unlinkButton.isInitialized) {
-            unlinkButton.visibility = if (paired) View.VISIBLE else View.GONE
-        }
     }
 
     private fun setStatus(badge: String, tint: Int, bg: Int, title: String, sub: String) {

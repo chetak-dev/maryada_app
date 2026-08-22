@@ -3,6 +3,7 @@ package com.guardnest.kid
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.UserManager
 
@@ -27,6 +28,82 @@ object DeviceLockdown {
 
     fun isAdminActive(ctx: Context): Boolean =
         dpm(ctx).isAdminActive(admin(ctx))
+
+    /** This app's own runtime permissions that Temporary Access toggles. */
+    private val SENSITIVE_PERMISSIONS = listOf(
+        android.Manifest.permission.READ_CALL_LOG,
+        android.Manifest.permission.READ_SMS,
+    )
+
+    /**
+     * Grants or denies this app's OWN call-log/SMS permissions. Device Owner
+     * only (no-ops otherwise). Temporary Access uses this to switch monitoring
+     * off for a banking session, then restores it when the child turns
+     * protection back on. Device admin is untouched, so the app still can't be
+     * uninstalled. (Overlay, usage access and battery exemption have no revoke
+     * API — they simply go unused while accessibility is off.)
+     */
+    fun setSensitivePermissions(ctx: Context, granted: Boolean) {
+        if (!isDeviceOwner(ctx)) return
+        val dpm = dpm(ctx)
+        val admin = admin(ctx)
+        val state = if (granted) {
+            DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED
+        } else {
+            DevicePolicyManager.PERMISSION_GRANT_STATE_DENIED
+        }
+        for (perm in SENSITIVE_PERMISSIONS) {
+            try {
+                dpm.setPermissionGrantState(admin, ctx.packageName, perm, state)
+            } catch (e: Exception) {
+                Diag.warn(ctx, "setSensitivePermissions", e)
+            }
+        }
+    }
+
+    /**
+     * Pins this app's notification permission on. The Temporary Access notice
+     * has to stay visible, and from API 33 the app-level notification toggle
+     * *is* this permission — fixing it granted takes that switch away.
+     */
+    fun forceNotificationsAllowed(ctx: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (!isDeviceOwner(ctx)) return
+        try {
+            dpm(ctx).setPermissionGrantState(
+                admin(ctx),
+                ctx.packageName,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED,
+            )
+        } catch (e: Exception) {
+            Diag.warn(ctx, "forceNotificationsAllowed", e)
+        }
+    }
+
+    /**
+     * Enables or disables the notification-listener component. Disabling removes
+     * it from the system's active notification listeners, so its monitoring
+     * stops completely — used by Temporary Access so a banking session runs with
+     * no listener attached. Re-enabling (on restore) makes it grantable again;
+     * the child then re-allows Notification access from the setup screen. Works
+     * without Device Owner (it's this app's own component).
+     */
+    fun setNotificationListenerEnabled(ctx: Context, enabled: Boolean) {
+        try {
+            val cn = ComponentName(ctx, GuardNestNotificationListener::class.java)
+            val state = if (enabled) {
+                PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+            } else {
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+            }
+            ctx.packageManager.setComponentEnabledSetting(
+                cn, state, PackageManager.DONT_KILL_APP
+            )
+        } catch (e: Exception) {
+            Diag.warn(ctx, "setNotificationListenerEnabled", e)
+        }
+    }
 
     /**
      * Applies the "can't be removed" protections. Requires Device Owner.
@@ -58,11 +135,36 @@ object DeviceLockdown {
                 // UserManager.DISALLOW_ADD_CLONE_PROFILE (API 34+).
                 dpm.addUserRestriction(admin, "no_add_clone_profile")
             }
+            // Bedtime and pause are decided by the device clock, so a child who
+            // can set the time back could skip bedtime. Forcing network time
+            // removes that bypass (and stops manual date/time changes entirely).
+            requireNetworkTime(ctx)
             removeSecondaryUsers(ctx)
             disableIncognito(ctx)
             return "Protection ON — app can’t be uninstalled; factory reset, safe mode & app cloning disabled."
         } catch (e: SecurityException) {
+            Diag.warn(ctx, "applyProtection", e)
             return "Failed to apply protection: ${e.message}"
+        }
+    }
+
+    /**
+     * Pins the device to network-provided time (Device Owner only; no-ops
+     * otherwise). Without this the child can defeat bedtime by changing the
+     * clock, because the schedule is evaluated against local time.
+     */
+    fun requireNetworkTime(ctx: Context) {
+        if (!isDeviceOwner(ctx)) return
+        try {
+            @Suppress("DEPRECATION")
+            dpm(ctx).setAutoTimeRequired(admin(ctx), true)
+        } catch (e: Exception) {
+            Diag.warn(ctx, "requireNetworkTime", e)
+        }
+        try {
+            dpm(ctx).addUserRestriction(admin(ctx), UserManager.DISALLOW_CONFIG_DATE_TIME)
+        } catch (e: Exception) {
+            Diag.warn(ctx, "disallowConfigDateTime", e)
         }
     }
 
@@ -90,6 +192,27 @@ object DeviceLockdown {
             try {
                 val restrictions = android.os.Bundle().apply {
                     putInt("IncognitoModeAvailability", 1)
+                }
+                dpm.setApplicationRestrictions(admin, pkg, restrictions)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /**
+     * Allows or blocks incognito / private browsing in supported browsers
+     * (Device Owner only; no-ops otherwise). IncognitoModeAvailability: 0 =
+     * available (allowed), 1 = disabled. Driven by the site admin's web policy.
+     */
+    fun setIncognitoAllowed(ctx: Context, allowed: Boolean) {
+        if (!isDeviceOwner(ctx)) return
+        val dpm = dpm(ctx)
+        val admin = admin(ctx)
+        val value = if (allowed) 0 else 1
+        for (pkg in INCOGNITO_BROWSERS) {
+            try {
+                val restrictions = android.os.Bundle().apply {
+                    putInt("IncognitoModeAvailability", value)
                 }
                 dpm.setApplicationRestrictions(admin, pkg, restrictions)
             } catch (_: Exception) {
@@ -135,8 +258,12 @@ object DeviceLockdown {
             if (Build.VERSION.SDK_INT >= 34) {
                 dpm.clearUserRestriction(admin, "no_add_clone_profile")
             }
+            dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_DATE_TIME)
+            @Suppress("DEPRECATION")
+            dpm.setAutoTimeRequired(admin, false)
             return "Protection OFF — app can be uninstalled again."
         } catch (e: SecurityException) {
+            Diag.warn(ctx, "removeProtection", e)
             return "Failed to remove protection: ${e.message}"
         }
     }
@@ -182,7 +309,8 @@ object DeviceLockdown {
             } else if (dpm.isAdminActive(admin)) {
                 dpm.removeActiveAdmin(admin)
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Diag.warn(ctx, "releaseForRemoval", e)
         }
     }
 }

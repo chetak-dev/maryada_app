@@ -4,40 +4,32 @@ import 'package:flutter/services.dart';
 import '../../data/hosts_repository.dart';
 import '../../data/invites_repository.dart';
 import '../../models/app_user.dart';
-import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feedback.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/dialog_buttons.dart';
+import '../../widgets/profile_button.dart';
 import '../../widgets/theme_toggle_button.dart';
+import '../../data/retention_service.dart';
 import 'host_detail_screen.dart';
 
 /// The admin console: manage host (parent) accounts and their child limits, and
 /// invite new hosts. Only reachable when the signed-in account has the `admin`
 /// role.
-class AdminHomeScreen extends StatelessWidget {
+class AdminHomeScreen extends StatefulWidget {
   const AdminHomeScreen({super.key});
 
-  Future<void> _signOut(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Sign out?'),
-        content: const Text('You can sign back in anytime with your email.'),
-        actions: [
-          DialogCancelButton(onPressed: () => Navigator.of(ctx).pop(false)),
-          DialogConfirmButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            label: 'Sign out',
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return;
-    if (AuthService.instance.isConfigured) {
-      await AuthService.instance.signOut();
-    } else if (context.mounted) {
-      Navigator.of(context).popUntil((r) => r.isFirst);
-    }
+  @override
+  State<AdminHomeScreen> createState() => _AdminHomeScreenState();
+}
+
+class _AdminHomeScreenState extends State<AdminHomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // The retention purge has no server to run on, so it happens here whenever
+    // the admin opens the console (it no-ops unless a day has passed).
+    RetentionService.runIfDue();
   }
 
   @override
@@ -50,38 +42,34 @@ class AdminHomeScreen extends StatelessWidget {
           children: [
             const BrandMark(size: 28, showGlow: false),
             const SizedBox(width: AppSpacing.sm),
-            Text('Admin console',
+            Text('Site admin',
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.5,
                     )),
           ],
         ),
-        actions: [
-          const ThemeToggleButton(),
-          IconButton(
-            tooltip: 'Sign out',
-            icon: const Icon(Icons.logout_rounded),
-            onPressed: () => _signOut(context),
-          ),
-          const SizedBox(width: AppSpacing.xs),
+        actions: const [
+          ThemeToggleButton(),
+          ProfileButton(),
+          SizedBox(width: AppSpacing.xs),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _inviteHost(context),
         icon: const Icon(Icons.person_add_alt_1_rounded),
-        label: const Text('Invite host'),
+        label: const Text('Grant access'),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl * 2),
         children: [
-          Text('Hosts',
+          Text('Parents',
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: AppSpacing.sm),
           const _HostsList(),
           const SizedBox(height: AppSpacing.lg),
-          Text('Pending invites',
+          Text('Pending access grants',
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: AppSpacing.sm),
           const _InvitesList(),
@@ -94,60 +82,93 @@ class AdminHomeScreen extends StatelessWidget {
     final emailCtl = TextEditingController();
     final limitCtl = TextEditingController(text: '5');
     final formKey = GlobalKey<FormState>();
+    var access = AccessLevel.edit;
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Invite a host'),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: emailCtl,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Host email',
-                  hintText: 'parent@example.com',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Grant parent access'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextFormField(
+                  controller: emailCtl,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Parent email',
+                    hintText: 'parent@example.com',
+                  ),
+                  validator: (v) {
+                    final s = (v ?? '').trim();
+                    if (s.isEmpty || !s.contains('@') || !s.contains('.')) {
+                      return 'Enter a valid email';
+                    }
+                    return null;
+                  },
                 ),
-                validator: (v) {
-                  final s = (v ?? '').trim();
-                  if (s.isEmpty || !s.contains('@') || !s.contains('.')) {
-                    return 'Enter a valid email';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: AppSpacing.md),
-              TextFormField(
-                controller: limitCtl,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(
-                  labelText: 'Child limit',
-                  hintText: '5',
+                const SizedBox(height: AppSpacing.md),
+                Text('Access',
+                    style: Theme.of(ctx).textTheme.labelLarge),
+                const SizedBox(height: AppSpacing.xs),
+                SegmentedButton<AccessLevel>(
+                  segments: const [
+                    ButtonSegment(
+                      value: AccessLevel.view,
+                      label: Text('View'),
+                      icon: Icon(Icons.visibility_outlined),
+                    ),
+                    ButtonSegment(
+                      value: AccessLevel.edit,
+                      label: Text('Edit'),
+                      icon: Icon(Icons.edit_outlined),
+                    ),
+                  ],
+                  selected: {access},
+                  onSelectionChanged: (s) => setLocal(() => access = s.first),
                 ),
-                validator: (v) {
-                  final n = int.tryParse((v ?? '').trim());
-                  if (n == null || n < 1 || n > 100) return '1 – 100';
-                  return null;
-                },
-              ),
-            ],
+                const SizedBox(height: 6),
+                Text(
+                  access == AccessLevel.view
+                      ? 'Can view families, children and rules only.'
+                      : 'Can add children and change rules.',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                if (access == AccessLevel.edit) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  TextFormField(
+                    controller: limitCtl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: const InputDecoration(
+                      labelText: 'Child limit',
+                      hintText: '5',
+                    ),
+                    validator: (v) {
+                      final n = int.tryParse((v ?? '').trim());
+                      if (n == null || n < 1 || n > 100) return '1 – 100';
+                      return null;
+                    },
+                  ),
+                ],
+              ],
+            ),
           ),
+          actions: [
+            DialogCancelButton(onPressed: () => Navigator.pop(ctx, false)),
+            DialogConfirmButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.pop(ctx, true);
+                }
+              },
+              label: 'Grant access',
+            ),
+          ],
         ),
-        actions: [
-          DialogCancelButton(onPressed: () => Navigator.pop(ctx, false)),
-          DialogConfirmButton(
-            onPressed: () {
-              if (formKey.currentState?.validate() ?? false) {
-                Navigator.pop(ctx, true);
-              }
-            },
-            label: 'Create invite',
-          ),
-        ],
       ),
     );
     if (ok != true || !context.mounted) return;
@@ -156,27 +177,33 @@ class AdminHomeScreen extends StatelessWidget {
       final code = await InvitesRepository.instance.createInvite(
         email: emailCtl.text,
         maxChildren: int.parse(limitCtl.text.trim()),
+        access: access,
       );
-      if (context.mounted) _showInviteCode(context, emailCtl.text.trim(), code);
+      if (context.mounted) {
+        _showInviteCode(context, emailCtl.text.trim(), code, access);
+      }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Couldn\u2019t invite: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Couldn’t grant access — ${friendlyError(e)}')));
       }
     }
   }
 
-  void _showInviteCode(BuildContext context, String email, String code) {
+  void _showInviteCode(
+      BuildContext context, String email, String code, AccessLevel access) {
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Invite created'),
+        title: const Text('Access granted'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Ask $email to sign up with this email. Their account becomes '
-                'a host automatically on first sign-in.'),
+            Text('Ask $email to sign in with this email (Google or password). '
+                'Their account becomes an org admin with '
+                '${access == AccessLevel.view ? 'view' : 'edit'} access on first '
+                'sign-in.'),
             const SizedBox(height: AppSpacing.md),
             Container(
               width: double.infinity,
@@ -202,7 +229,7 @@ class AdminHomeScreen extends StatelessWidget {
             onPressed: () {
               Clipboard.setData(ClipboardData(text: code));
               ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(content: Text('Invite code copied')));
+                  const SnackBar(content: Text('Access code copied')));
             },
             child: const Text('Copy'),
           ),
@@ -287,8 +314,8 @@ class _HostCard extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       host.suspended
-                          ? 'Suspended · limit ${host.maxChildren}'
-                          : 'Child limit: ${host.maxChildren}',
+                          ? 'Suspended · ${host.access == AccessLevel.edit ? 'Edit' : 'View'} · limit ${host.maxChildren}'
+                          : '${host.access == AccessLevel.edit ? 'Edit access' : 'View only'} · limit ${host.maxChildren}',
                       style: TextStyle(
                         color: host.suspended
                             ? AppColors.danger
@@ -304,17 +331,66 @@ class _HostCard extends StatelessWidget {
                 onSelected: (v) async {
                   if (v == 'limit') {
                     await _editLimit(context, host);
+                  } else if (v == 'edit') {
+                    if (await _confirm(context,
+                        title: 'Give edit access?',
+                        message:
+                            '${host.email} will be able to add children and change rules.',
+                        confirmLabel: 'Give edit access')) {
+                      await HostsRepository.instance
+                          .setAccess(host.uid, AccessLevel.edit);
+                    }
+                  } else if (v == 'view') {
+                    if (await _confirm(context,
+                        title: 'Set to view only?',
+                        message:
+                            '${host.email} will only be able to view — not add children or change rules.',
+                        confirmLabel: 'Set view only')) {
+                      await HostsRepository.instance
+                          .setAccess(host.uid, AccessLevel.view);
+                    }
                   } else if (v == 'suspend') {
-                    await HostsRepository.instance
-                        .setSuspended(host.uid, !host.suspended);
+                    final suspend = !host.suspended;
+                    if (await _confirm(context,
+                        title: suspend ? 'Suspend parent?' : 'Activate parent?',
+                        message: suspend
+                            ? '${host.email} will be blocked from signing in.'
+                            : '${host.email} will be able to sign in again.',
+                        confirmLabel: suspend ? 'Suspend' : 'Activate',
+                        destructive: suspend)) {
+                      await HostsRepository.instance
+                          .setSuspended(host.uid, suspend);
+                    }
+                  } else if (v == 'remove') {
+                    if (await _confirm(context,
+                        title: 'Remove parent?',
+                        message:
+                            'This removes ${host.email}’s access. They’ll be blocked until granted again. Families and children are not deleted.',
+                        confirmLabel: 'Remove',
+                        destructive: true)) {
+                      await HostsRepository.instance.delete(host.uid);
+                    }
                   }
                 },
                 itemBuilder: (_) => [
-                  const PopupMenuItem(
-                      value: 'limit', child: Text('Set child limit')),
+                  if (host.access != AccessLevel.edit)
+                    const PopupMenuItem(
+                        value: 'edit', child: Text('Give edit access')),
+                  if (host.access != AccessLevel.view)
+                    const PopupMenuItem(
+                        value: 'view', child: Text('Set to view only')),
+                  if (host.access == AccessLevel.edit)
+                    const PopupMenuItem(
+                        value: 'limit', child: Text('Set child limit')),
                   PopupMenuItem(
                     value: 'suspend',
                     child: Text(host.suspended ? 'Activate' : 'Suspend'),
+                  ),
+                  const PopupMenuDivider(),
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: Text('Remove parent',
+                        style: TextStyle(color: AppColors.danger)),
                   ),
                 ],
               ),
@@ -354,6 +430,37 @@ class _HostCard extends StatelessWidget {
       await HostsRepository.instance.setMaxChildren(host.uid, n);
     }
   }
+
+  Future<bool> _confirm(
+    BuildContext context, {
+    required String title,
+    required String message,
+    required String confirmLabel,
+    bool destructive = false,
+  }) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx, false)),
+          if (destructive)
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(confirmLabel),
+            )
+          else
+            DialogConfirmButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              label: confirmLabel,
+            ),
+        ],
+      ),
+    );
+    return ok == true;
+  }
 }
 
 class _InvitesList extends StatelessWidget {
@@ -383,7 +490,8 @@ class _InvitesList extends StatelessWidget {
                   leading: const Icon(Icons.mail_outline_rounded),
                   title: Text(i.email,
                       style: const TextStyle(fontWeight: FontWeight.w600)),
-                  subtitle: Text('Code ${i.code} · limit ${i.maxChildren}'),
+                  subtitle: Text(
+                      'Code ${i.code} · ${i.access == AccessLevel.edit ? 'Edit' : 'View'} · limit ${i.maxChildren}'),
                   trailing: IconButton(
                     tooltip: 'Cancel invite',
                     icon: const Icon(Icons.close_rounded),
@@ -424,7 +532,8 @@ class _EmptyCard extends StatelessWidget {
             const SizedBox(height: AppSpacing.xs),
             Text(subtitle,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: AppColors.textSecondary)),
+                style:
+                    TextStyle(color: AppColors.textSecondaryOf(context))),
           ],
         ),
       ),

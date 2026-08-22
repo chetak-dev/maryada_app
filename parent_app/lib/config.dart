@@ -1,17 +1,19 @@
-/// App-wide configuration for the admin / host account model.
+/// App-wide configuration for the site-admin / org-admin account model.
 ///
-/// The admin is bootstrapped by email: whoever signs in with
-/// [kBootstrapAdminEmail] is granted the `admin` role on first sign-in (this is
-/// also enforced in the Firestore security rules). Change this value (here and
-/// in `backend/firestore.rules`) to hand the admin role to a real address.
+/// The site admin is bootstrapped by email: whoever signs in with
+/// [kBootstrapAdminEmail] is granted the `siteAdmin` role on first sign-in
+/// (this is also enforced in the Firestore security rules). Change this value
+/// (here and in `backend/firestore.rules`) to hand the site-admin role to a
+/// different address.
 library;
 
-const String kBootstrapAdminEmail = 'admin@maryada.app';
+const String kBootstrapAdminEmail = 'chetakkumarpradhan@gmail.com';
 
-/// Default number of children a new host may add until an admin changes it.
+/// Default number of children a new org admin may add until the site admin
+/// changes it.
 const int kDefaultMaxChildren = 5;
 
-/// When true, any signed-in email can become a host on first sign-in (open
-/// self-signup). When false, only invited emails become hosts. Kept open for
-/// now so existing accounts and demos keep working.
-const bool kOpenHostSignup = true;
+/// Only emails the site admin has granted access to may become org admins.
+/// Everyone else who signs in becomes a blocked `user` until granted. Kept
+/// false so access is pre-authorised by the site admin.
+const bool kOpenHostSignup = false;

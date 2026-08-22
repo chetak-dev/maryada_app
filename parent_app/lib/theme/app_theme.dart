@@ -4,7 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'tokens.dart';
 
-/// Central Material 3 theme for the GuardNest parent app. Provides a polished
+/// Central Material 3 theme for the Maryada parent app. Provides a polished
 /// light and dark theme built from the design tokens. Use `AppTheme.light()`
 /// and `AppTheme.dark()`; never define per-screen [ThemeData].
 class AppTheme {

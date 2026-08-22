@@ -1,6 +1,9 @@
-import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/db.dart';
 import '../../data/family_repository.dart';
@@ -10,8 +13,8 @@ import '../../models/child.dart';
 import '../../models/geofence.dart';
 import '../../theme/tokens.dart';
 
-/// Location & places: a live-location card (stylised map placeholder for now),
-/// and the child's geofenced places. Places persist to Firestore when live.
+/// Location & places: a live map per child, and the child's geofenced places.
+/// Places persist to Firestore when live.
 class LocationScreen extends StatefulWidget {
   const LocationScreen({super.key, this.childName, this.familyId, this.childId});
 
@@ -139,152 +142,321 @@ class _LiveLocationCard extends StatelessWidget {
     return '${d.inDays} d ago';
   }
 
+  Future<void> _openInMaps(double lat, double lng) async {
+    final uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=$lat,$lng');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = child;
     final hasLoc = c != null && c.hasLocation;
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          SizedBox(
-            height: 180,
-            child: hasLoc
-                ? _MapThumb(lat: c.lat!, lng: c.lng!)
-                : Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppColors.primary.withValues(alpha: 0.18),
-                              AppColors.accent.withValues(alpha: 0.14),
-                            ],
-                          ),
-                        ),
-                      ),
-                      CustomPaint(painter: _GridPainter(), size: Size.infinite),
-                      const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.location_searching_rounded,
-                                color: AppColors.primary, size: 44),
-                            SizedBox(height: 4),
-                            Text('Waiting for device location…',
-                                style: TextStyle(
-                                    color: AppColors.textMuted,
-                                    fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            child: Row(
-              children: [
-                const Icon(Icons.my_location_rounded,
-                    color: AppColors.accent, size: 20),
-                const SizedBox(width: AppSpacing.sm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        hasLoc
-                            ? (c.address != null && c.address!.isNotEmpty
-                                ? c.address!
-                                : '${c.lat!.toStringAsFixed(5)}, ${c.lng!.toStringAsFixed(5)}')
-                            : 'No location yet',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      Text(
-                        hasLoc && c.locationUpdatedAt != null
-                            ? 'Updated ${_ago(c.locationUpdatedAt!)}'
-                            : 'The device will report its location once online',
-                        style: Theme.of(context)
-                            .textTheme
-                            .bodySmall
-                            ?.copyWith(color: AppColors.textMuted),
-                      ),
+    if (!hasLoc) {
+      return Card(
+        clipBehavior: Clip.antiAlias,
+        child: SizedBox(
+          height: 260,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppColors.primary.withValues(alpha: 0.18),
+                      AppColors.accent.withValues(alpha: 0.14),
                     ],
                   ),
                 ),
-                if (hasLoc && c.locationAccuracy != null)
-                  Row(
-                    children: [
-                      const Icon(Icons.gps_fixed_rounded,
-                          color: AppColors.accent, size: 18),
-                      const SizedBox(width: 4),
-                      Text('±${c.locationAccuracy!.round()}m',
-                          style: const TextStyle(fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-              ],
-            ),
+              ),
+              CustomPaint(painter: _GridPainter(), size: Size.infinite),
+              const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.location_searching_rounded,
+                        color: AppColors.primary, size: 44),
+                    SizedBox(height: 4),
+                    Text('Waiting for device location…',
+                        style: TextStyle(
+                            color: AppColors.textMuted,
+                            fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
+      );
+    }
+
+    // The map fills the card and the details float over it — the map is the
+    // content here, not a thumbnail above a text row.
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: 400,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: _MapThumb(
+                lat: c.lat!,
+                lng: c.lng!,
+                accuracy: c.locationAccuracy,
+                markerColor: c.avatarColor,
+                markerInitials: c.initials,
+              ),
+            ),
+            Positioned(
+              left: AppSpacing.sm,
+              right: AppSpacing.sm,
+              bottom: AppSpacing.sm,
+              child: Container(
+                padding: const EdgeInsets.all(AppSpacing.md),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceOf(context),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  boxShadow: AppShadow.card,
+                ),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 18,
+                      backgroundColor: c.avatarColor,
+                      child: Text(
+                        c.initials,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14),
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm + 2),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            c.address != null && c.address!.isNotEmpty
+                                ? c.address!
+                                : '${c.lat!.toStringAsFixed(5)}, ${c.lng!.toStringAsFixed(5)}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13.5,
+                                height: 1.25),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            [
+                              if (c.locationUpdatedAt != null)
+                                'Updated ${_ago(c.locationUpdatedAt!)}',
+                              if (c.locationAccuracy != null)
+                                'accurate to ${c.locationAccuracy!.round()} m',
+                            ].join(' · '),
+                            style: const TextStyle(
+                                color: AppColors.textMuted, fontSize: 11.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    IconButton.filledTonal(
+                      tooltip: 'Open in Maps',
+                      onPressed: () => _openInMaps(c.lat!, c.lng!),
+                      icon: const Icon(Icons.directions_rounded, size: 20),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// A lightweight map thumbnail built from a single OpenStreetMap tile centred
-/// on the reported position (no map SDK / API key needed).
-class _MapThumb extends StatelessWidget {
-  const _MapThumb({required this.lat, required this.lng});
+/// An interactive map centred on the reported position. Replaces a single
+/// 256px OpenStreetMap tile stretched to fill the card, which was blurry and
+/// couldn't be panned or zoomed.
+class _MapThumb extends StatefulWidget {
+  const _MapThumb({
+    required this.lat,
+    required this.lng,
+    this.accuracy,
+    this.markerColor = AppColors.primary,
+    this.markerInitials = '',
+  });
+
   final double lat;
   final double lng;
+  final double? accuracy;
+  final Color markerColor;
+  final String markerInitials;
+
+  @override
+  State<_MapThumb> createState() => _MapThumbState();
+}
+
+class _MapThumbState extends State<_MapThumb> {
+  final _controller = MapController();
+
+  @override
+  void didUpdateWidget(_MapThumb old) {
+    super.didUpdateWidget(old);
+    // A fresh report moves the pin; follow it.
+    if (old.lat != widget.lat || old.lng != widget.lng) {
+      _controller.move(LatLng(widget.lat, widget.lng), _controller.camera.zoom);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    const z = 16;
-    final n = 1 << z;
-    final latRad = lat * math.pi / 180.0;
-    final xF = (lng + 180.0) / 360.0 * n;
-    final yF = (1 -
-            math.log(math.tan(latRad) + 1 / math.cos(latRad)) / math.pi) /
-        2 *
-        n;
-    final xt = xF.floor();
-    final yt = yF.floor();
-    final url = 'https://tile.openstreetmap.org/$z/$xt/$yt.png';
-    final ax = (xF - xt) * 2 - 1;
-    final ay = (yF - yt) * 2 - 1;
+    final here = LatLng(widget.lat, widget.lng);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Stack(
-      fit: StackFit.expand,
       children: [
-        Image.network(
-          url,
-          fit: BoxFit.cover,
-          errorBuilder: (_, _, _) => DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  AppColors.primary.withValues(alpha: 0.18),
-                  AppColors.accent.withValues(alpha: 0.14),
-                ],
-              ),
+        FlutterMap(
+          mapController: _controller,
+          options: MapOptions(
+            initialCenter: here,
+            initialZoom: 16,
+            interactionOptions: const InteractionOptions(
+              flags: InteractiveFlag.pinchZoom |
+                  InteractiveFlag.drag |
+                  InteractiveFlag.doubleTapZoom,
             ),
           ),
+          children: [
+            TileLayer(
+              // CARTO's basemap reads like a modern map app; plain OSM raster
+              // tiles look dated. `{r}` serves retina tiles, so it stays sharp.
+              urlTemplate: isDark
+                  ? 'https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png'
+                  : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+              subdomains: const ['a', 'b', 'c', 'd'],
+              retinaMode: RetinaMode.isHighDensity(context),
+              userAgentPackageName: 'com.guardnest.guardnest_parent',
+            ),
+            if (widget.accuracy != null && widget.accuracy! > 0)
+              CircleLayer(
+                circles: [
+                  CircleMarker(
+                    point: here,
+                    radius: widget.accuracy!,
+                    useRadiusInMeter: true,
+                    color: widget.markerColor.withValues(alpha: 0.15),
+                    borderColor: widget.markerColor.withValues(alpha: 0.5),
+                    borderStrokeWidth: 1,
+                  ),
+                ],
+              ),
+            MarkerLayer(
+              markers: [
+                // An avatar pin (initials in the child's colour) rather than an
+                // anonymous dot, so the map reads as "this is where Aarav is".
+                Marker(
+                  point: here,
+                  width: 44,
+                  height: 54,
+                  alignment: Alignment.topCenter,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: widget.markerColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x40000000),
+                              blurRadius: 6,
+                              offset: Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Text(
+                          widget.markerInitials,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      // The pin tip anchoring the avatar to the exact spot.
+                      CustomPaint(
+                        size: const Size(12, 8),
+                        painter: _PinTipPainter(widget.markerColor),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            // CARTO's basemaps require attribution.
+            const RichAttributionWidget(
+              alignment: AttributionAlignment.bottomLeft,
+              attributions: [
+                TextSourceAttribution('OpenStreetMap contributors'),
+                TextSourceAttribution('CARTO'),
+              ],
+            ),
+          ],
         ),
-        Align(
-          alignment: Alignment(ax.clamp(-1.0, 1.0), ay.clamp(-1.0, 1.0)),
-          child: const Icon(Icons.location_on_rounded,
-              color: AppColors.primary, size: 40),
+        Positioned(
+          top: AppSpacing.sm,
+          right: AppSpacing.sm,
+          child: Material(
+            color: AppColors.surfaceOf(context),
+            shape: const CircleBorder(),
+            elevation: 2,
+            child: IconButton(
+              tooltip: 'Recenter',
+              onPressed: () => _controller.move(here, 16),
+              icon: const Icon(Icons.my_location_rounded,
+                  size: 20, color: AppColors.primary),
+            ),
+          ),
         ),
       ],
     );
   }
+}
+
+class _PinTipPainter extends CustomPainter {
+  _PinTipPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // latlong2 exports its own Path type, so the dart:ui one needs the prefix.
+    final path = ui.Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width / 2, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(_PinTipPainter oldDelegate) =>
+      oldDelegate.color != color;
 }
 
 class _GridPainter extends CustomPainter {
@@ -357,6 +529,20 @@ class _HistoryList extends StatelessWidget {
   final String familyId;
   final String childId;
 
+  /// Bucket labels in display order; a point falls in the first that matches.
+  static String _bucketOf(DateTime? t) {
+    if (t == null) return 'Earlier';
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final that = DateTime(t.year, t.month, t.day);
+    final days = today.difference(that).inDays;
+    if (days <= 0) return 'Today';
+    if (days == 1) return 'Yesterday';
+    if (days < 7) return 'This week';
+    if (days < 31) return 'This month';
+    return 'Earlier';
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<LocationPoint>>(
@@ -372,17 +558,85 @@ class _HistoryList extends StatelessWidget {
             ),
           );
         }
-        return Card(
-          child: Column(
-            children: [
-              for (var i = 0; i < points.length; i++) ...[
-                if (i > 0) const Divider(height: 1, indent: 56),
-                _HistoryTile(point: points[i]),
-              ],
-            ],
-          ),
+
+        // Points arrive newest-first, so buckets appear in order as the label
+        // changes while walking the list.
+        final sections = <Widget>[];
+        String? bucket;
+        var group = <LocationPoint>[];
+        void flush() {
+          final label = bucket;
+          if (label == null || group.isEmpty) return;
+          sections
+            ..add(_HistorySectionHeader(label: label, count: group.length))
+            ..add(Card(
+              margin: const EdgeInsets.only(bottom: AppSpacing.md),
+              child: Column(
+                children: [
+                  for (var i = 0; i < group.length; i++) ...[
+                    if (i > 0) const Divider(height: 1, indent: 56),
+                    _HistoryTile(point: group[i]),
+                  ],
+                ],
+              ),
+            ));
+          group = <LocationPoint>[];
+        }
+
+        for (final p in points) {
+          final b = _bucketOf(p.at);
+          if (b != bucket) {
+            flush();
+            bucket = b;
+          }
+          group.add(p);
+        }
+        flush();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: sections,
         );
       },
+    );
+  }
+}
+
+class _HistorySectionHeader extends StatelessWidget {
+  const _HistorySectionHeader({required this.label, required this.count});
+  final String label;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.xs, 0, AppSpacing.xs, AppSpacing.sm),
+      child: Row(
+        children: [
+          Text(
+            label.toUpperCase(),
+            style: TextStyle(
+              color: AppColors.textSecondaryOf(context),
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+              child: Container(height: 1, color: AppColors.borderOf(context))),
+          const SizedBox(width: AppSpacing.sm),
+          Text(
+            '$count',
+            style: const TextStyle(
+              color: AppColors.textMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -391,14 +645,17 @@ class _HistoryTile extends StatelessWidget {
   const _HistoryTile({required this.point});
   final LocationPoint point;
 
+  /// Section headers carry the day, so the tile only needs the clock time —
+  /// plus the date for entries older than yesterday.
   static String _when(DateTime? t) {
     if (t == null) return '';
     final now = DateTime.now();
     final h = t.hour % 12 == 0 ? 12 : t.hour % 12;
     final ampm = t.hour < 12 ? 'AM' : 'PM';
     final time = '$h:${t.minute.toString().padLeft(2, '0')} $ampm';
-    final sameDay = t.year == now.year && t.month == now.month && t.day == now.day;
-    if (sameDay) return 'Today $time';
+    final today = DateTime(now.year, now.month, now.day);
+    final that = DateTime(t.year, t.month, t.day);
+    if (today.difference(that).inDays <= 1) return time;
     return '${t.day}/${t.month} $time';
   }
 

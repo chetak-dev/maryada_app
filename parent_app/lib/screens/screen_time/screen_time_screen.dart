@@ -4,6 +4,9 @@ import '../../data/db.dart';
 import '../../data/rules_repository.dart';
 import '../../models/screen_time_rule.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/access_scope.dart';
+import '../../widgets/feedback.dart';
+import '../../widgets/read_only_banner.dart';
 
 /// Interactive Screen-time editor: instant pause, daily limit and a bedtime
 /// (downtime) window. Persists to Firestore when [familyId] is set and Firebase
@@ -23,6 +26,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
   bool _dirty = false;
   bool _loading = false;
   bool _saving = false;
+  bool _canEdit = true;
 
   bool get _live => widget.familyId != null && Db.ready;
 
@@ -42,12 +46,15 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
         _rule = rule;
         _loading = false;
       });
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      context.showError('Couldn’t load screen-time rules', e);
     }
   }
 
   void _update(VoidCallback change) {
+    if (!_canEdit) return;
     setState(() {
       change();
       _dirty = true;
@@ -81,7 +88,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
         if (mounted) {
           setState(() => _saving = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Couldn’t save: $e')),
+            SnackBar(content: Text('Couldn’t save — ${friendlyError(e)}')),
           );
         }
         return;
@@ -103,6 +110,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _canEdit = AccessScope.of(context);
     final title = widget.childName == null
         ? 'Screen time'
         : 'Screen time · ${widget.childName}';
@@ -114,6 +122,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
               padding: const EdgeInsets.fromLTRB(
                   AppSpacing.md, AppSpacing.md, AppSpacing.md, 120),
               children: [
+                if (!_canEdit) const ReadOnlyBanner(),
                 _PauseCard(
                   paused: _rule.paused,
                   onChanged: (v) => _update(() => _rule.paused = v),
@@ -133,7 +142,7 @@ class _ScreenTimeScreenState extends State<ScreenTimeScreen> {
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.md),
           child: FilledButton(
-            onPressed: (_dirty && !_saving) ? _save : null,
+            onPressed: (_canEdit && _dirty && !_saving) ? _save : null,
             child: _saving
                 ? const SizedBox(
                     height: 22,

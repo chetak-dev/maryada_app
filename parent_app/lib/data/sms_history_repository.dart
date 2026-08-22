@@ -41,29 +41,20 @@ class SmsHistoryRepository {
   SmsHistoryRepository._();
   static final instance = SmsHistoryRepository._();
 
-  Stream<List<SmsMessage>> watch(String familyId, String childId) {
-    return Db.families
-        .doc(familyId)
-        .collection('children')
-        .doc(childId)
-        .collection('smsHistory')
-        .doc('current')
-        .snapshots()
-        .map((doc) {
-      final data = doc.data();
-      if (data == null) return const <SmsMessage>[];
-      return ((data['messages'] as List?) ?? const [])
-          .whereType<Map>()
-          .map((m) => SmsMessage(
-                address: (m['address'] ?? 'Unknown').toString(),
-                body: (m['body'] ?? '').toString(),
-                direction:
-                    smsDirectionFromType((m['type'] as num?)?.toInt() ?? 0),
-                at: (m['at'] is num)
-                    ? DateTime.fromMillisecondsSinceEpoch((m['at'] as num).toInt())
-                    : null,
-              ))
-          .toList();
-    });
+  Stream<List<SmsMessage>> watch(String familyId, String childId,
+      {String? deviceId}) {
+    return Db.watchReportArray<SmsMessage>(
+      deviceId: deviceId,
+      familyId: familyId,
+      childId: childId,
+      collection: 'smsHistory',
+      field: 'messages',
+      parse: (m) => SmsMessage(
+        address: (m['address'] ?? 'Unknown').toString(),
+        body: (m['body'] ?? '').toString(),
+        direction: smsDirectionFromType((m['type'] as num?)?.toInt() ?? 0),
+        at: Db.millis(m['at']),
+      ),
+    );
   }
 }

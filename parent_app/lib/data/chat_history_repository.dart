@@ -74,10 +74,18 @@ class ChatHistoryRepository {
           String familyId, String childId) =>
       Db.children(familyId).doc(childId).collection('chatThreads');
 
-  /// Streams the chat list, sorted alphabetically by contact name.
-  Stream<List<ChatSummary>> watchChats(String familyId, String childId) {
+  /// Streams the chat list, most recently updated first. Threads carry the
+  /// device that captured them, so a device filter narrows the list.
+  Stream<List<ChatSummary>> watchChats(String familyId, String childId,
+      {String? deviceId}) {
     return _threads(familyId, childId).snapshots().map((snap) {
-      final chats = snap.docs.map((d) {
+      final chats = snap.docs.where((d) {
+        if (deviceId == null) return true;
+        // Threads captured before per-device tagging carry no device, so they
+        // belong to whichever device existed then.
+        final uid = (d.data()['deviceUid'] ?? '').toString();
+        return uid.isEmpty || uid == deviceId;
+      }).map((d) {
         final m = d.data();
         return ChatSummary(
           senderKey: d.id,
@@ -92,8 +100,10 @@ class ChatHistoryRepository {
               : null,
         );
       }).toList();
-      chats.sort((a, b) =>
-          a.sender.toLowerCase().compareTo(b.sender.toLowerCase()));
+      // Most recently active conversation first, the way the messenger's own
+      // chat list orders itself.
+      chats.sort((a, b) => (b.at?.millisecondsSinceEpoch ?? 0)
+          .compareTo(a.at?.millisecondsSinceEpoch ?? 0));
       return chats;
     });
   }

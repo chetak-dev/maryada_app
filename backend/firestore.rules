@@ -11,47 +11,82 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // ----- Account roles (Admin -> Host) -----
-    function userRole() {
-      return isSignedIn()
-          && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
-        : '';
+    // ----- Account roles (Site admin -> Org admin) -----
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
+    function hasUserDoc() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function userRole() {
+      return hasUserDoc() ? userData().role : '';
+    }
+    // The site admin (formerly 'admin'); the legacy id is kept so existing
+    // accounts keep working.
     function isAdmin() {
-      return userRole() == 'admin';
+      return userRole() == 'siteAdmin' || userRole() == 'admin';
+    }
+    // Any org admin (parent). All org admins share one view of all children.
+    function isOrgAdmin() {
+      return userRole() == 'orgAdmin' || userRole() == 'host';
+    }
+    // An org admin's granted access ('view' | 'edit'). Legacy accounts have no
+    // access field and are treated as editors so nothing they could do breaks.
+    function myAccess() {
+      return hasUserDoc() ? userData().get('access', 'edit') : 'edit';
+    }
+    // May add children / change rules: site admins always, org admins only with
+    // edit access. Requires a real account record, so removing (deleting) an
+    // org admin immediately revokes their edit access.
+    function canEdit() {
+      return isAdmin() || (hasUserDoc() && myAccess() == 'edit');
+    }
+    function inviteGrant(code) {
+      return get(/databases/$(database)/documents/invites/$(code)).data;
     }
 
-    // Signed-in account records. The admin is bootstrapped by a fixed email;
-    // everyone else may only create their own record as a host. Role, child
-    // limit and suspension can only be changed by an admin (a host may edit
-    // benign fields on their own record but not escalate).
+    // Signed-in account records. The site admin is bootstrapped by a fixed
+    // email; an org admin may only be created with a valid, unused access grant
+    // for their email; everyone else is a privilege-less 'user'. Role, access,
+    // child limit and suspension can only be changed by the site admin.
     match /users/{uid} {
       allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
       allow create: if isSignedIn() && request.auth.uid == uid
         && (
-          (request.resource.data.role == 'admin'
-            && request.auth.token.email == 'admin@maryada.app')
-          || request.resource.data.role == 'host'
+          (request.resource.data.role in ['siteAdmin', 'admin']
+            && request.auth.token.email == 'chetakkumarpradhan@gmail.com')
+          || request.resource.data.role == 'user'
+          || (request.resource.data.role in ['orgAdmin', 'host']
+              && request.resource.data.inviteCode is string
+              && request.auth.token.email is string
+              && exists(/databases/$(database)/documents/invites/$(request.resource.data.inviteCode))
+              && inviteGrant(request.resource.data.inviteCode).used == false
+              && inviteGrant(request.resource.data.inviteCode).email == request.auth.token.email.lower()
+              && request.resource.data.access == inviteGrant(request.resource.data.inviteCode).get('access', 'edit')
+              && request.resource.data.maxChildren == inviteGrant(request.resource.data.inviteCode).maxChildren)
         );
       allow update: if isAdmin()
         || (isSignedIn() && request.auth.uid == uid
             && request.resource.data.role == resource.data.role
+            && request.resource.data.access == resource.data.access
             && request.resource.data.maxChildren == resource.data.maxChildren
             && request.resource.data.suspended == resource.data.suspended);
       allow delete: if isAdmin();
     }
 
-    // Host invites created by the admin. Any signed-in user may read (to find
-    // and redeem their own invite by email); only an admin creates/deletes;
-    // redemption is a one-way used:false -> true update.
+    // Access grants created by the site admin (`invites/{code}`). Any signed-in
+    // user may read (to find/redeem their own grant); only the site admin
+    // creates/deletes; redemption is a one-way used:false -> true update.
     match /invites/{code} {
       allow read: if isSignedIn();
       allow create, delete: if isAdmin();
       allow update: if isAdmin()
         || (isSignedIn()
             && resource.data.used == false
-            && request.resource.data.used == true);
+            && request.resource.data.used == true
+            && request.resource.data.diff(resource.data)
+                .affectedKeys().hasOnly(['used', 'usedBy', 'usedAt']));
     }
 
     function familyData(familyId) {
@@ -66,46 +101,134 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/families/$(familyId)/children/$(childId)).data.deviceUid;
     }
 
+    // ----- Paired child devices -----
+    // A child device signs in anonymously, so "signed in" says nothing about
+    // who it is. `devices/{uid}` is the device's proof of which family/child it
+    // belongs to: it can only be written when that child doc already names this
+    // uid as its deviceUid (see the pairing handshake below), so a device can
+    // never point itself at someone else's family.
+    function deviceDoc() {
+      return get(/databases/$(database)/documents/devices/$(request.auth.uid)).data;
+    }
+    function hasDeviceDoc() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/devices/$(request.auth.uid));
+    }
+    function isDeviceOfFamily(familyId) {
+      return hasDeviceDoc() && deviceDoc().familyId == familyId;
+    }
+    function isDeviceOfChild(familyId, childId) {
+      return hasDeviceDoc()
+        && deviceDoc().familyId == familyId
+        && deviceDoc().childId == childId;
+    }
+
+    // The device's own registration. Writable only by that device, and only
+    // once the child doc it names has already been bound to this uid.
+    match /devices/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin() || isOrgAdmin());
+      // The device removes its own registration when unpaired; a guardian can
+      // also clear it, so a device that never comes back online can't keep
+      // reading the family's rules forever.
+      allow delete: if isSignedIn()
+        && (request.auth.uid == uid || isAdmin() || (isOrgAdmin() && canEdit()));
+      allow create, update: if isSignedIn() && request.auth.uid == uid
+        && request.resource.data.familyId is string
+        && request.resource.data.childId is string
+        && childDeviceUid(
+             request.resource.data.familyId,
+             request.resource.data.childId
+           ) == request.auth.uid;
+    }
+
+    // A device claiming a child slot for the first time must present the
+    // one-time pairing code that the parent generated for exactly that child.
+    // Without this any anonymous client that guessed a family/child id could
+    // write itself in as the device and take the slot over.
+    function isPairingClaim(familyId, childId) {
+      return request.resource.data.deviceUid == request.auth.uid
+        && request.resource.data.pairingCode is string
+        && exists(/databases/$(database)/documents/pairingCodes/$(request.resource.data.pairingCode))
+        && get(/databases/$(database)/documents/pairingCodes/$(request.resource.data.pairingCode)).data.used == false
+        && get(/databases/$(database)/documents/pairingCodes/$(request.resource.data.pairingCode)).data.familyId == familyId
+        && get(/databases/$(database)/documents/pairingCodes/$(request.resource.data.pairingCode)).data.childId == childId;
+    }
+
+    // A device that is already bound to this child keeps writing (heartbeat,
+    // reports) as itself, and can never hand the slot to another uid.
+    function isBoundDevice() {
+      return isSignedIn()
+        && resource != null
+        && resource.data.deviceUid == request.auth.uid
+        && request.resource.data.deviceUid == request.auth.uid;
+    }
+
+    // Collection-group read of every child, so any org admin can query all
+    // children across families in one shared view (collectionGroup('children')).
+    // Firestore requires this recursive-wildcard rule to authorise the group
+    // query; per-document access (devices, parents) is still governed by the
+    // specific rules under /families/{familyId}/children below.
+    match /{path=**}/children/{childId} {
+      allow read: if isAdmin() || isOrgAdmin();
+    }
+
     match /families/{familyId} {
       allow read: if isAdmin()
+        || isOrgAdmin()
         || (isSignedIn() && request.auth.uid in resource.data.parentUids);
       allow create: if isSignedIn()
         && request.resource.data.ownerUid == request.auth.uid
-        && request.auth.uid in request.resource.data.parentUids;
-      allow update: if isSignedIn() && request.auth.uid in resource.data.parentUids;
-      allow delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
+        && request.auth.uid in request.resource.data.parentUids
+        && canEdit();
+      allow update: if isSignedIn()
+        && request.auth.uid in resource.data.parentUids
+        && canEdit();
+      allow delete: if isSignedIn()
+        && resource.data.ownerUid == request.auth.uid
+        && canEdit();
 
-      // Family-wide rules (screen time, app rules, web filter): guardians write,
-      // any paired child device may read to enforce locally.
+      // Family-wide rules (screen time, app rules, web filter): editor guardians
+      // write; a paired device of THIS family may read to enforce locally.
+      // (Previously any signed-in user could read these — and child devices use
+      // anonymous auth, so that meant anyone at all.)
       match /rules/{doc} {
-        allow read: if isSignedIn();
-        allow write: if isParentOf(familyId);
+        allow read: if isAdmin() || isOrgAdmin() || isParentOf(familyId)
+          || isDeviceOfFamily(familyId);
+        allow write: if isParentOf(familyId) && canEdit();
       }
       match /appRules/{doc} {
-        allow read: if isSignedIn();
-        allow write: if isParentOf(familyId);
+        allow read: if isAdmin() || isOrgAdmin() || isParentOf(familyId)
+          || isDeviceOfFamily(familyId);
+        allow write: if isParentOf(familyId) && canEdit();
       }
 
       match /children/{childId} {
         allow read: if isAdmin()
+          || isOrgAdmin()
           || isParentOf(familyId)
           || (isSignedIn() && resource.data.deviceUid == request.auth.uid);
-        allow write: if isParentOf(familyId)
-          || (isSignedIn() && request.resource.data.deviceUid == request.auth.uid);
+        allow write: if canEdit()
+          || isBoundDevice()
+          || isPairingClaim(familyId, childId);
 
         // Per-child subtree (usage, location, geofences, installed apps, ...).
         match /{document=**} {
           allow read: if isAdmin()
+            || isOrgAdmin()
             || isParentOf(familyId)
+            || isDeviceOfChild(familyId, childId)
             || (isSignedIn() && childDeviceUid(familyId, childId) == request.auth.uid);
-          allow write: if isParentOf(familyId)
+          allow write: if canEdit()
+            || isDeviceOfChild(familyId, childId)
             || (isSignedIn() && childDeviceUid(familyId, childId) == request.auth.uid);
         }
       }
 
       match /alerts/{alertId} {
-        allow read, update, delete: if isParentOf(familyId);
-        allow create: if isParentOf(familyId)
+        allow read: if isAdmin() || isParentOf(familyId);
+        allow update, delete: if isAdmin() || (isParentOf(familyId) && canEdit());
+        allow create: if (isParentOf(familyId) && canEdit())
+          || isDeviceOfChild(familyId, request.resource.data.childId)
           || (isSignedIn()
               && childDeviceUid(familyId, request.resource.data.childId)
                   == request.auth.uid);
@@ -113,23 +236,26 @@ service cloud.firestore {
     }
 
     // App update manifest (OTA). Any signed-in device may read the latest
-    // version + APK URL; only a real (non-anonymous) parent account may publish.
+    // version + APK URL; only the site admin may publish.
     match /appConfig/{doc} {
       allow read: if isSignedIn();
-      allow write: if isSignedIn()
-        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+      allow write: if isAdmin();
     }
 
     // One-time pairing codes. A signed-in user may read a code by its exact id;
-    // only a guardian of the referenced family may create/delete; updates are
-    // limited to the redemption handshake (marking used).
+    // only a guardian of the referenced family may create/delete. Redemption is
+    // limited to the handshake, and only the device that actually claimed the
+    // child slot may mark the code used — otherwise any signed-in client could
+    // burn a parent's codes before the child device got to use them.
     match /pairingCodes/{code} {
       allow get: if isSignedIn();
       allow list: if false;
-      allow create: if isParentOf(request.resource.data.familyId);
-      allow delete: if isParentOf(resource.data.familyId);
-      allow update: if isParentOf(resource.data.familyId)
+      allow create: if isParentOf(request.resource.data.familyId) && canEdit();
+      allow delete: if isParentOf(resource.data.familyId) && canEdit();
+      allow update: if (isParentOf(resource.data.familyId) && canEdit())
         || (isSignedIn()
+            && resource.data.used == false
+            && isDeviceOfChild(resource.data.familyId, resource.data.childId)
             && request.resource.data.diff(resource.data)
                 .affectedKeys().hasOnly(['used', 'usedAt']));
     }

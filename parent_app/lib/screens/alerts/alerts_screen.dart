@@ -7,6 +7,7 @@ import '../../models/activity.dart';
 import '../../models/child.dart';
 import '../../models/family.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/profile_button.dart';
 import '../../widgets/theme_toggle_button.dart';
 
 /// Recent notable events — only a blocked website visit or an app-tampering /
@@ -24,7 +25,11 @@ class AlertsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Alerts'),
-        actions: const [ThemeToggleButton(), SizedBox(width: AppSpacing.xs)],
+        actions: const [
+          ThemeToggleButton(),
+          ProfileButton(),
+          SizedBox(width: AppSpacing.xs)
+        ],
       ),
       body: _live ? _LiveAlerts(uid: uid!) : _EmptyAlerts(),
     );
@@ -60,8 +65,11 @@ class _LiveAlerts extends StatelessWidget {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
+                // Tamper events are surfaced on the device/profile screens, not
+                // here — parents asked to keep this list to content alerts only.
                 final relevant = (snap.data ?? const <Alert>[])
-                    .where((a) => a.type != AlertType.unknown)
+                    .where((a) =>
+                        a.type != AlertType.unknown && a.type != AlertType.tamper)
                     .toList();
                 if (relevant.isEmpty) return _EmptyAlerts();
                 return _GroupedAlerts(
@@ -208,7 +216,7 @@ class _EmptyAlerts extends StatelessWidget {
               'New alerts about your family will appear here.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: AppColors.textSecondary),
+                  ?.copyWith(color: AppColors.textSecondaryOf(context)),
             ),
           ],
         ),

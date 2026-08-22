@@ -5,6 +5,7 @@ import '../../data/user_repository.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/access_scope.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/dialog_buttons.dart';
 import '../admin/admin_home_screen.dart';
@@ -72,9 +73,13 @@ class _RoleRouterState extends State<_RoleRouter> {
           initialData: resolveSnap.data,
           builder: (context, snap) {
             final u = snap.data ?? resolveSnap.data!;
-            if (u.isAdmin) return const AdminHomeScreen();
+            if (u.isSiteAdmin) return const AdminHomeScreen();
             if (u.suspended) return const _SuspendedScreen();
-            return HomeShell(uid: widget.uid);
+            if (!u.hasAccess) return const _PendingAccessScreen();
+            return AccessScope(
+              canEdit: u.canEdit,
+              child: HomeShell(uid: widget.uid),
+            );
           },
         );
       },
@@ -132,7 +137,68 @@ class _SuspendedScreen extends StatelessWidget {
                 'Your access has been paused. Please contact your administrator.',
                 textAlign: TextAlign.center,
                 style: theme.textTheme.bodyMedium
-                    ?.copyWith(color: AppColors.textSecondary),
+                    ?.copyWith(color: AppColors.textSecondaryOf(context)),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              OutlinedButton.icon(
+                onPressed: () => _signOut(context),
+                icon: const Icon(Icons.logout_rounded),
+                label: const Text('Sign out'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown to a signed-in account that hasn't been granted access yet. They must
+/// wait for the site admin to grant them view or edit access.
+class _PendingAccessScreen extends StatelessWidget {
+  const _PendingAccessScreen();
+
+  Future<void> _signOut(BuildContext context) async {
+    if (AuthService.instance.isConfigured) {
+      await AuthService.instance.signOut();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final email = AuthService.instance.currentUser?.email ?? '';
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 84,
+                height: 84,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.hourglass_top_rounded,
+                    color: AppColors.primary, size: 40),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Text('Access pending',
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                email.isEmpty
+                    ? 'Your account isn’t authorised yet. Ask the site admin to '
+                        'grant you access.'
+                    : 'Your account ($email) isn’t authorised yet. Ask the site '
+                        'admin to grant you view or edit access.',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: AppColors.textSecondaryOf(context)),
               ),
               const SizedBox(height: AppSpacing.lg),
               OutlinedButton.icon(

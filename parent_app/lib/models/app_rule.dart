@@ -57,7 +57,8 @@ class AppRule {
       appName.trim().isEmpty ? '?' : appName.trim()[0].toUpperCase();
 }
 
-/// Placeholder installed-apps list so the screen is explorable pre-backend.
+/// Sample apps shown only before Firebase is connected, so the screen can be
+/// explored offline.
 List<AppRule> demoAppRules() => [
       AppRule(packageName: 'com.google.android.youtube', appName: 'YouTube', color: const Color(0xFFEF4444)),
       AppRule(packageName: 'com.instagram.android', appName: 'Instagram', color: const Color(0xFFD946EF)),

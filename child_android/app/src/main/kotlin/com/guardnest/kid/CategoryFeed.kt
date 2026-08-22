@@ -110,9 +110,18 @@ object CategoryFeed {
                         current[cat] = set
                         sets = HashMap(current) // publish incrementally
                         Log.i(TAG, "category '$cat' loaded: ${set.size} domains")
+                    } else if (!current.containsKey(cat)) {
+                        // Nothing downloaded and nothing cached: this category is
+                        // effectively NOT being enforced. Surface it rather than
+                        // leaving the parent to believe it's blocked.
+                        Diag.warn(
+                            ctx, "categoryFeed:$cat",
+                            detail = "no domains available — category not enforced",
+                        )
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Diag.warn(ctx, "categoryFeed", e)
             } finally {
                 refreshing = false
             }
@@ -123,14 +132,27 @@ object CategoryFeed {
      * True if [host] (already lowercased, no www.) falls in any [enabled]
      * category's domain list — matching the host or any of its parent domains.
      */
-    fun isBlocked(host: String, enabled: Set<String>): Boolean {
-        if (enabled.isEmpty()) return false
+    fun isBlocked(host: String, enabled: Set<String>): Boolean =
+        categoryOf(host, enabled) != null
+
+    /** The first [enabled] category [host] falls in, or null if none match. */
+    fun categoryOf(host: String, enabled: Set<String>): String? {
+        if (enabled.isEmpty()) return null
         val s = sets
         for (cat in enabled) {
             val set = s[cat] ?: continue
-            if (suffixMatch(host, set)) return true
+            if (suffixMatch(host, set)) return cat
         }
-        return false
+        return null
+    }
+
+    /** Like [categoryOf] but across every downloaded list — used only to tag a
+     *  block that already happened, never to decide blocking. */
+    fun categoryOfAny(host: String): String? {
+        for ((cat, set) in sets) {
+            if (suffixMatch(host, set)) return cat
+        }
+        return null
     }
 
     private fun suffixMatch(host: String, set: Set<String>): Boolean {
@@ -156,7 +178,8 @@ object CategoryFeed {
             }
             if (conn.responseCode != 200) return null
             conn.inputStream.bufferedReader().use { it.readText() }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "download failed: $url", e)
             null
         } finally {
             try {
@@ -177,7 +200,8 @@ object CategoryFeed {
             }
             if (conn.responseCode != 200) return null
             conn.inputStream.use { it.readBytes() }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            Log.w(TAG, "download failed: $url", e)
             null
         } finally {
             try {
