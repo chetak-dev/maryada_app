@@ -343,6 +343,8 @@ class EnforcementService : Service() {
             // haven't taken the latest OTA update.
             "appVersionCode" to appVersionCode(),
             "appVersionName" to appVersionName(),
+            // Exactly what the child's own screen shows, so both agree.
+            "appVersionLabel" to AppUpdater.versionLabel(this),
         )
         // Surface the most recent internal failure so a device that has quietly
         // stopped working is visible in the admin app instead of just looking OK.
@@ -1472,10 +1474,23 @@ class EnforcementService : Service() {
     private fun startAsForeground() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // MIN keeps it out of the status bar and at the bottom of the
+            // shade. Android won't let a foreground service run with no
+            // notification at all, so this is as quiet as it gets — the only
+            // notice the child should actually notice is the setup one.
             val channel = NotificationChannel(
-                CHANNEL_ID, "Protection", NotificationManager.IMPORTANCE_LOW
-            ).apply { description = "Keeps Maryada protection active." }
+                CHANNEL_ID, "Protection", NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                description = "Keeps Maryada protection active."
+                setShowBadge(false)
+            }
             nm.createNotificationChannel(channel)
+            // The old LOW channel would keep its status-bar icon forever;
+            // importance can't be lowered once a channel exists.
+            try {
+                nm.deleteNotificationChannel(LEGACY_CHANNEL_ID)
+            } catch (_: Exception) {
+            }
         }
         val notification: Notification =
             (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -1486,6 +1501,10 @@ class EnforcementService : Service() {
                 .setContentText("Family protection is on.")
                 .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
                 .setOngoing(true)
+                .apply {
+                    @Suppress("DEPRECATION")
+                    setPriority(Notification.PRIORITY_MIN)
+                }
                 .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -1499,7 +1518,8 @@ class EnforcementService : Service() {
     }
 
     companion object {
-        private const val CHANNEL_ID = "guardnest_protection"
+        private const val CHANNEL_ID = "guardnest_protection_min"
+        private const val LEGACY_CHANNEL_ID = "guardnest_protection"
         private const val NOTIF_ID = 1001
         private const val EVAL_INTERVAL_MS = 30_000L
         private const val LOCKGUARD_INTERVAL_MS = 700L

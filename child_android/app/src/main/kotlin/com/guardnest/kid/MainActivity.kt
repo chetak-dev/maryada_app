@@ -308,16 +308,7 @@ class MainActivity : Activity() {
     }
 
     /** The installed app version, e.g. "v1.0.0(0)". */
-    private fun versionLabel(): String {
-        return try {
-            val info = packageManager.getPackageInfo(packageName, 0)
-            // The build shown to the user restarts at 0 for the stable release;
-            // versionCode keeps climbing because updates depend on it.
-            "v${info.versionName}($BUILD_LABEL)"
-        } catch (_: Exception) {
-            ""
-        }
-    }
+    private fun versionLabel(): String = AppUpdater.versionLabel(this)
 
     /** Credit line pinned at the very bottom of the screen. */
     private fun buildVersionFooter(): View {
@@ -1311,8 +1302,5 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_VPN = 0x7A
         const val LOCATION_REQ = 7
-
-        /** The build number shown next to the version name. */
-        const val BUILD_LABEL = "0"
     }
 }

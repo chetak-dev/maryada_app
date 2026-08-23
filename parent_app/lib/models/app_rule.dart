@@ -17,6 +17,12 @@ class AppRule {
   /// Names of the children who have this app installed (family view only).
   final List<String> owners;
 
+  /// Set on a child's screen when the family-wide rule already blocks / allows
+  /// this app. The device blocks when EITHER rule does, so an inherited rule
+  /// can't be undone from here — it's shown, not editable.
+  bool blockedByFamily;
+  bool bankingByFamily;
+
   AppRule({
     required this.packageName,
     required this.appName,
@@ -25,6 +31,8 @@ class AppRule {
     this.dailyLimitMinutes = 0,
     this.bankingAllowed = false,
     this.owners = const [],
+    this.blockedByFamily = false,
+    this.bankingByFamily = false,
   });
 
   /// Builds a rule for a real installed app, deriving a stable accent color
@@ -55,6 +63,10 @@ class AppRule {
 
   String get initials =>
       appName.trim().isEmpty ? '?' : appName.trim()[0].toUpperCase();
+
+  /// What the child device actually enforces: either rule blocking is enough.
+  bool get effectivelyBlocked => blocked || blockedByFamily;
+  bool get effectivelyBanking => bankingAllowed || bankingByFamily;
 }
 
 /// Sample apps shown only before Firebase is connected, so the screen can be

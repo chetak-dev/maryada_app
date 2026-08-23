@@ -24,6 +24,20 @@ object AppUpdater {
 
     const val ACTION_INSTALL_RESULT = "com.guardnest.kid.UPDATE_INSTALL_RESULT"
 
+    /**
+     * The build number shown to people, next to the version name. Kept apart
+     * from `versionCode`, which only ever climbs so updates can install.
+     */
+    const val BUILD_LABEL = "0"
+
+    /** e.g. "v1.0.0(0)" — what both apps display for this build. */
+    fun versionLabel(ctx: Context): String = try {
+        val name = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
+        "v$name($BUILD_LABEL)"
+    } catch (_: Exception) {
+        ""
+    }
+
     @Volatile
     private var checking = false
 

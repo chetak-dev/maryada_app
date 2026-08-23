@@ -813,7 +813,7 @@ class _DeviceCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 5),
-                        Expanded(
+                        Flexible(
                           child: Text(
                             device.statusLabel,
                             maxLines: 1,
@@ -825,6 +825,19 @@ class _DeviceCard extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (device.versionLabel.isNotEmpty) ...[
+                          const SizedBox(width: 5),
+                          Text(
+                            '· ${device.versionLabel}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textMuted,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ],

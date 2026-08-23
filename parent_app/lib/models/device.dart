@@ -20,6 +20,10 @@ class Device {
   final bool permissionsOk;
   final int appVersionCode;
   final String? appVersionName;
+
+  /// The version exactly as the child's own screen shows it, e.g. "v1.0.0(0)".
+  /// Empty on devices running a build from before it was reported.
+  final String appVersionLabel;
   final Map<String, bool> protections;
 
   const Device({
@@ -32,6 +36,7 @@ class Device {
     this.permissionsOk = false,
     this.appVersionCode = 0,
     this.appVersionName,
+    this.appVersionLabel = '',
     this.protections = const {},
   });
 
@@ -83,6 +88,14 @@ class Device {
   String get statusLabel =>
       allProtectionsOk ? 'Protected' : 'Permission missing';
 
+  /// What to print next to the status. Falls back to the raw version name for
+  /// devices that predate the reported label.
+  String get versionLabel {
+    if (appVersionLabel.isNotEmpty) return appVersionLabel;
+    final name = appVersionName;
+    return (name == null || name.isEmpty) ? '' : 'v$name';
+  }
+
   static Device fromDoc(String id, Map<String, dynamic> m) {
     final rawProt = m['protections'];
     return Device(
@@ -95,6 +108,7 @@ class Device {
       permissionsOk: m['permissionsOk'] == true,
       appVersionCode: (m['appVersionCode'] as num?)?.toInt() ?? 0,
       appVersionName: m['appVersionName'] as String?,
+      appVersionLabel: (m['appVersionLabel'] ?? '').toString(),
       protections: {
         if (rawProt is Map)
           for (final e in rawProt.entries) e.key.toString(): e.value == true,

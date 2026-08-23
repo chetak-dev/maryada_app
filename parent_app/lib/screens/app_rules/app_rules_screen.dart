@@ -55,6 +55,11 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
           : await AppRulesRepository.instance.loadInstalledApps(widget.familyId!);
       final saved = await AppRulesRepository.instance
           .load(widget.familyId!, childId: widget.childId);
+      // On a child's screen the family-wide rules apply too — the device
+      // blocks when either does, so show the same merged picture.
+      final family = widget.childId == null
+          ? const <String, AppRuleData>{}
+          : await AppRulesRepository.instance.load(widget.familyId!);
       if (!mounted) return;
       setState(() {
         _apps = reported
@@ -67,6 +72,11 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
             app.blocked = r.blocked;
             app.dailyLimitMinutes = r.dailyLimitMinutes;
             app.bankingAllowed = r.bankingAllowed;
+          }
+          final f = family[app.packageName];
+          if (f != null) {
+            app.blockedByFamily = f.blocked;
+            app.bankingByFamily = f.bankingAllowed;
           }
         }
         _loading = false;
@@ -107,8 +117,8 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
       if (q.isNotEmpty && !a.appName.toLowerCase().contains(q)) return false;
       return switch (_filter) {
         _AppFilter.all => true,
-        _AppFilter.blocked => a.blocked,
-        _AppFilter.banking => a.bankingAllowed,
+        _AppFilter.blocked => a.effectivelyBlocked,
+        _AppFilter.banking => a.effectivelyBanking,
       };
     }).toList();
   }
@@ -119,8 +129,8 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
     final title = widget.childName == null
         ? 'App rules'
         : 'App rules · ${widget.childName}';
-    final blocked = _apps.where((a) => a.blocked).length;
-    final banking = _apps.where((a) => a.bankingAllowed).length;
+    final blocked = _apps.where((a) => a.effectivelyBlocked).length;
+    final banking = _apps.where((a) => a.effectivelyBanking).length;
     final list = _filtered;
     return Scaffold(
       appBar: AppBar(title: Text(title)),
@@ -359,12 +369,16 @@ class _AppTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final owners = app.owners.isNotEmpty ? app.owners.join(', ') : null;
+    // A family-wide rule can't be undone from one child's screen, so its
+    // controls are shown in their real state but locked.
+    final lockBlock = app.blockedByFamily;
+    final lockBanking = app.bankingByFamily;
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surfaceOf(context),
         borderRadius: BorderRadius.circular(AppRadius.lg),
         border: Border.all(
-          color: app.blocked
+          color: app.effectivelyBlocked
               ? AppColors.danger.withValues(alpha: 0.35)
               : AppColors.borderOf(context),
         ),
@@ -405,20 +419,27 @@ class _AppTile extends StatelessWidget {
                     color: AppColors.textPrimaryOf(context),
                   ),
                 ),
-                if (owners != null || app.blocked || app.bankingAllowed) ...[
+                if (owners != null ||
+                    app.effectivelyBlocked ||
+                    app.effectivelyBanking) ...[
                   const SizedBox(height: 5),
                   Wrap(
                     spacing: 6,
                     runSpacing: 4,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      if (app.blocked)
+                      if (app.effectivelyBlocked)
                         const _Tag(label: 'Blocked', color: AppColors.danger),
-                      if (app.bankingAllowed)
+                      if (app.effectivelyBanking)
                         const _Tag(
                             label: 'Temp access',
                             color: AppColors.success,
                             icon: Icons.account_balance_rounded),
+                      if (lockBlock || lockBanking)
+                        const _Tag(
+                            label: 'All children',
+                            color: AppColors.info,
+                            icon: Icons.groups_2_rounded),
                       if (owners != null)
                         Text(
                           owners,
@@ -432,12 +453,12 @@ class _AppTile extends StatelessWidget {
             ),
           ),
           Switch(
-            value: app.blocked,
-            onChanged: canEdit ? onBlockChanged : null,
+            value: app.effectivelyBlocked,
+            onChanged: (canEdit && !lockBlock) ? onBlockChanged : null,
           ),
           PopupMenuButton<String>(
             tooltip: 'More',
-            enabled: canEdit,
+            enabled: canEdit && !lockBanking,
             position: PopupMenuPosition.under,
             icon: const Icon(Icons.more_vert_rounded,
                 size: 20, color: AppColors.textMuted),
@@ -447,7 +468,7 @@ class _AppTile extends StatelessWidget {
             itemBuilder: (context) => [
               CheckedPopupMenuItem<String>(
                 value: 'banking',
-                checked: app.bankingAllowed,
+                checked: app.effectivelyBanking,
                 child: const Text('Allow in Temp access mode'),
               ),
             ],
