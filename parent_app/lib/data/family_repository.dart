@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../models/child.dart';
@@ -28,19 +29,105 @@ class FamilyRepository {
             s.docs.map((d) => FamilyModel.fromMap(d.id, d.data())).toList());
   }
 
-  Future<FamilyModel> createFamily({
-    required String name,
-    required String ownerUid,
-  }) async {
+  /// The one family this account may see: the one the site admin's grant
+  /// assigned (`users/{uid}.familyId`), and only once the account is actually
+  /// in its `parentUids` (the dashboard joins on sign-in — reading children
+  /// before that would be denied by the rules). Emits '' when unassigned.
+  Stream<String> watchMyFamilyId(String uid) {
+    return Db.instance
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .asyncExpand((d) {
+      final granted = (d.data()?['familyId'] ?? '').toString();
+      if (granted.isEmpty) return Stream.value('');
+      return watchFamilies(uid)
+          .map((fams) => fams.any((f) => f.id == granted) ? granted : '');
+    });
+  }
+
+  /// Creates the household a grant will attach a parent to. It has no owner
+  /// yet — the invited parent becomes its first guardian when they sign in.
+  /// Site-admin only (the security rules say so).
+  Future<FamilyModel> createFamilyForGrant(String name) async {
     final doc = Db.families.doc();
     final family = FamilyModel(
       id: doc.id,
-      name: name,
-      ownerUid: ownerUid,
-      parentUids: [ownerUid],
+      name: name.trim(),
+      ownerUid: '',
+      parentUids: const [],
     );
     await doc.set(family.toMap());
     return family;
+  }
+
+  /// Adds a guardian to the household their grant named. The security rules
+  /// only allow adding themselves, and only to that one family. A plain
+  /// update, so a deleted family isn't silently resurrected.
+  Future<void> joinFamily(String familyId, String uid) {
+    return Db.families.doc(familyId).update({
+      'parentUids': FieldValue.arrayUnion([uid]),
+    });
+  }
+
+  /// Removes a guardian from a household — their own membership only (rules).
+  /// Run when a grant moved them elsewhere, so a stale membership can't keep
+  /// showing them another family's children.
+  Future<void> leaveFamily(String familyId, String uid) {
+    return Db.families.doc(familyId).update({
+      'parentUids': FieldValue.arrayRemove([uid]),
+    });
+  }
+
+  /// Every family, for the site admin's grant dialog.
+  Future<List<FamilyModel>> listFamilies() async {
+    final snap = await Db.families.get();
+    return snap.docs
+        .map((d) => FamilyModel.fromMap(d.id, d.data()))
+        .toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  }
+
+  /// Every family, live, for the site admin's console.
+  Stream<List<FamilyModel>> watchAllFamilies() {
+    return Db.families.snapshots().map((s) => s.docs
+        .map((d) => FamilyModel.fromMap(d.id, d.data()))
+        .toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase())));
+  }
+
+  /// What's attached to a family: child profiles and registered devices.
+  Future<({int children, int devices})> familyLoad(String familyId) async {
+    final kids = await Db.children(familyId).count().get();
+    final devices = await Db.instance
+        .collection('devices')
+        .where('familyId', isEqualTo: familyId)
+        .count()
+        .get();
+    return (children: kids.count ?? 0, devices: devices.count ?? 0);
+  }
+
+  /// Site-admin delete of an **empty** family. Refused while any child profile
+  /// or registered device is attached — those must be removed first, so a
+  /// household can never be pulled out from under live monitoring.
+  Future<void> deleteFamily(String familyId) async {
+    final load = await familyLoad(familyId);
+    if (load.children > 0) {
+      throw StateError(
+          'this family still has ${load.children} child profile(s). Delete them first.');
+    }
+    if (load.devices > 0) {
+      throw StateError(
+          'this family still has ${load.devices} registered device(s). Remove them first.');
+    }
+    // Firestore doesn't cascade-delete subcollections with the parent doc.
+    for (final sub in ['rules', 'appRules', 'alerts']) {
+      final docs = await Db.families.doc(familyId).collection(sub).get();
+      for (final d in docs.docs) {
+        await d.reference.delete();
+      }
+    }
+    await Db.families.doc(familyId).delete();
   }
 
   // ---- Children ----------------------------------------------------------
@@ -53,19 +140,27 @@ class FamilyRepository {
         );
   }
 
-  /// Every child profile across ALL families, each with its family id. Org
-  /// admins share one view of all children (security rules allow org admins to
-  /// read the whole `children` collection group). Profiles without a device
+  /// Every child profile in the signed-in parent's own family.
+  ///
+  /// Families are isolated: a parent must never see another household's
+  /// children, so this follows the family their grant assigned — not whatever
+  /// families they happen to still be listed in. Profiles without a device
   /// show too — a parent creates the profile first, then pairs devices to it.
-  Stream<List<({Child child, String familyId})>> watchAllChildren() {
-    return Db.instance.collectionGroup('children').snapshots().map(
-          (s) => s.docs.map((d) {
-            final familyId = d.reference.parent.parent!.id;
-            return (child: _childFromDoc(d.id, d.data()), familyId: familyId);
-          }).toList()
-            ..sort((a, b) =>
-                a.child.name.toLowerCase().compareTo(b.child.name.toLowerCase())),
-        );
+  Stream<List<({Child child, String familyId})>> watchMyChildren([String? uid]) {
+    final me = uid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (me == null) {
+      return Stream.value(const <({Child child, String familyId})>[]);
+    }
+    return watchMyFamilyId(me).asyncExpand((familyId) {
+      if (familyId.isEmpty) {
+        return Stream.value(const <({Child child, String familyId})>[]);
+      }
+      return watchChildren(familyId).map((kids) => kids
+          .map((c) => (child: c, familyId: familyId))
+          .toList()
+        ..sort((a, b) =>
+            a.child.name.toLowerCase().compareTo(b.child.name.toLowerCase())));
+    });
   }
 
   Future<Child> addChild({
@@ -188,6 +283,7 @@ class FamilyRepository {
       locationUpdatedAt: (map['locationUpdatedAt'] as Timestamp?)?.toDate(),
       address: (map['address'] as String?),
       lastSeenAt: (map['lastSeenAt'] as Timestamp?)?.toDate(),
+      paired: paired,
       lockboxActive: map['lockboxActive'] == true,
       lockboxSince: (map['lockboxSince'] as Timestamp?)?.toDate(),
       protections: protections,

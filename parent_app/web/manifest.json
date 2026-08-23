@@ -1,6 +1,6 @@
 {
-    "name": "Maryada",
-    "short_name": "Maryada",
+    "name": "Maryada Host",
+    "short_name": "Maryada Host",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

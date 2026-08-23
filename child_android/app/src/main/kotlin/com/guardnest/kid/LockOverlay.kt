@@ -12,6 +12,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 
@@ -147,15 +148,9 @@ object LockOverlay {
             ).apply { gravity = Gravity.CENTER }
         }
 
-        content.addView(TextView(ctx).apply {
-            text = "\uD83D\uDEE1\uFE0F"
-            textSize = 56f
-            gravity = Gravity.CENTER
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(40).toFloat()
-                setColor(Color.argb(36, 255, 255, 255))
-            }
+        content.addView(ImageView(ctx).apply {
+            setImageResource(R.drawable.maryada_logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
             layoutParams = LinearLayout.LayoutParams(dp(132), dp(132)).apply {
                 bottomMargin = dp(30)
             }
@@ -207,7 +202,7 @@ object LockOverlay {
 
         root.addView(content)
         root.addView(TextView(ctx).apply {
-            text = "An Initiative by ISKCON Brahmapur"
+            text = "Made with \u2764\uFE0F by ISKCON Brahmapur"
             setTextColor(Color.parseColor("#CBBEF9"))
             textSize = 12f
             typeface = Typeface.DEFAULT_BOLD

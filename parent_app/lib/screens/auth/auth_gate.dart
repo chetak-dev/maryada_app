@@ -73,6 +73,10 @@ class _RoleRouterState extends State<_RoleRouter> {
           initialData: resolveSnap.data,
           builder: (context, snap) {
             final u = snap.data ?? resolveSnap.data!;
+            // Also mirrored into the static fallback: pushed routes don't sit
+            // under the AccessScope below, and must never default to editable
+            // for a view-only account.
+            AccessScope.fallback = u.isSiteAdmin || u.canEdit;
             if (u.isSiteAdmin) return const AdminHomeScreen();
             if (u.suspended) return const _SuspendedScreen();
             if (!u.hasAccess) return const _PendingAccessScreen();

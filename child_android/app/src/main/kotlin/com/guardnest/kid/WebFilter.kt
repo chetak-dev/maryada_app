@@ -153,6 +153,11 @@ object WebFilter {
     const val REASON_KEYWORD = "keyword"
     const val REASON_CONTENT = "content"
 
+    /** Categories that are always blocked — not even the site admin can turn
+     *  them off. Anything read from a policy/rule doc is unioned with these. */
+    val PROTECTIVE_CATEGORIES: Set<String> =
+        setOf("adult", "gambling", "drugs", "weapons", "violence")
+
     /** Curated per-category seed domains — blocked instantly and offline, before
      *  the live category feeds download. Shared with [WebFilterVpnService]. */
     val CATEGORY_SEEDS: Map<String, List<String>> = mapOf(

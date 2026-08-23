@@ -84,6 +84,7 @@ class EnforcementService : Service() {
                 reportYoutubeHistory()
                 restoreTempAccessIfRecovered(this@EnforcementService)
                 TempAccessNotice.sync(this@EnforcementService)
+                SetupNotice.sync(this@EnforcementService)
                 enforceLockbox()
                 checkForUpdate()
             } catch (t: Throwable) {
@@ -1093,11 +1094,10 @@ class EnforcementService : Service() {
         val latestAt = HashMap<String, Long>()
         for (m in pending) {
             val key = hash("${m.app}\u0000${m.sender}")
-            // The id must come from the message alone. It used to fall back to
-            // the capture time when the row's own time wasn't readable, so
-            // re-opening a chat minted a new id for the same message and the
-            // parent saw it repeated once per visit.
-            val timeLabel = m.timeLabel.ifBlank { chatTimeFmt.format(Date(m.at)) }
+            // Only ever the bubble's own clock label. Falling back to the time
+            // we happened to scrape it at showed the parent a time the message
+            // was never sent at; an unreadable label now shows none.
+            val timeLabel = m.timeLabel
             val sortAt = chatSortAt(timeLabel, m.at, m.slot, m.dayStart)
             val messages = threads.document(key).collection("messages")
             // MessageStore owns the id: it remembers what was already uploaded
@@ -1141,7 +1141,7 @@ class EnforcementService : Service() {
                 "senderKey" to key,
                 "lastText" to m.text,
                 "lastOutgoing" to m.outgoing,
-                "lastTime" to m.timeLabel.ifBlank { chatTimeFmt.format(Date(m.at)) },
+                "lastTime" to m.timeLabel,
                 "at" to at,
                 "deviceUid" to deviceUid,
                 "updatedAt" to FieldValue.serverTimestamp(),
@@ -1445,16 +1445,9 @@ class EnforcementService : Service() {
                     // worth installing. Only the extras below are configurable.
                     val allowIncognito = snap?.getBoolean("allowIncognito") == true
                     DeviceLockdown.setIncognitoAllowed(this, allowIncognito)
-                    // Blocked categories are global too. Fall back to the protective
-                    // defaults until the site admin sets them.
-                    val hasCats = snap != null && snap.exists() &&
-                        snap.contains("blockedCategories")
-                    val cats = if (hasCats) {
-                        (snap!!.get("blockedCategories") as? List<*>)
-                            ?.mapNotNull { it as? String }?.toSet() ?: emptySet()
-                    } else {
-                        DEFAULT_PROTECTIVE_CATEGORIES
-                    }
+                    // The protective categories are as permanent as the filter
+                    // itself: whatever the policy doc says, they stay blocked.
+                    val cats = WebFilter.PROTECTIVE_CATEGORIES
                     // One atomic swap, so a decision can never see the new
                     // categories alongside the old safe-browsing flag.
                     WebFilter.updatePolicy(
@@ -1534,10 +1527,6 @@ class EnforcementService : Service() {
         private const val UPDATE_CHECK_MS = 3 * 60 * 60 * 1000L // 3 hours
         /** Tolerance before a chat time is treated as belonging to yesterday. */
         private const val FUTURE_SLACK_MS = 5 * 60 * 1000L
-
-        /** Domain categories blocked by default until the parent customises them. */
-        private val DEFAULT_PROTECTIVE_CATEGORIES =
-            setOf("adult", "gambling", "drugs", "weapons", "violence")
 
         /** Starts the service if this device is paired. */
         fun start(ctx: Context) {

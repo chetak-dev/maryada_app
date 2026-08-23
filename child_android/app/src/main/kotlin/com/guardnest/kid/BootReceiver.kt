@@ -11,7 +11,12 @@ class BootReceiver : BroadcastReceiver() {
             // Boot, or an app update that replaced our package — in both cases
             // any running foreground service was killed, so start it again.
             Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_MY_PACKAGE_REPLACED -> EnforcementService.start(context)
+            Intent.ACTION_MY_PACKAGE_REPLACED -> {
+                EnforcementService.start(context)
+                // Survives a reboot even while the device is still unpaired,
+                // which is exactly when setup is unfinished.
+                SetupNotice.sync(context.applicationContext)
+            }
         }
     }
 }

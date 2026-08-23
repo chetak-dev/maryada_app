@@ -811,10 +811,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
                 // Isolate this one message's row so the time and the send/read
                 // ticks can't be confused with a neighbouring message.
                 val bubble = tightBubble(node, ids.messageId)
-                val timeLabel = bubble
-                    ?.findAccessibilityNodeInfosByViewId(ids.dateId)
-                    ?.firstOrNull { !it.text.isNullOrBlank() }
-                    ?.text?.toString()?.trim().orEmpty()
+                val timeLabel = bubbleTime(bubble, ids.dateId)
                 // WhatsApp right-aligns the child's own messages; the delivery
                 // ticks only back that up when they're present.
                 val outgoing = bubbleSide(bubble, node, ids.statusId)
@@ -826,6 +823,26 @@ class GuardNestAccessibilityService : AccessibilityService() {
         } catch (e: Exception) {
             Diag.warn(this, "captureChatText", e)
         }
+    }
+
+    /**
+     * The clock label WhatsApp prints in the corner of the bubble ("10:24 pm").
+     *
+     * Only text that actually looks like a time is accepted: the date view also
+     * carries things like "Yesterday" or a sender name on some builds, and
+     * taking the first non-blank line stamped those onto the message. Builds
+     * that don't expose the id at all are handled by scanning the bubble for the
+     * same short line.
+     */
+    private fun bubbleTime(bubble: AccessibilityNodeInfo?, dateId: String): String {
+        if (bubble == null) return ""
+        bubble.findAccessibilityNodeInfosByViewId(dateId)
+            ?.mapNotNull { it.text?.toString()?.trim() }
+            ?.firstOrNull { CLOCK_RE.matches(it) }
+            ?.let { return it }
+        val texts = ArrayList<String>()
+        collectTexts(bubble, texts, 0)
+        return texts.firstOrNull { CLOCK_RE.matches(it) } ?: ""
     }
 
     /** A scanned conversation row: either a message ([node] set, [day] 0) or a
@@ -1765,6 +1782,9 @@ class GuardNestAccessibilityService : AccessibilityService() {
 
         /** How much wider one side gap must be to call a chat bubble's side. */
         const val SIDE_RATIO = 1.6f
+
+        /** A chat bubble's own time label, e.g. "10:24 pm" or "22:04". */
+        val CLOCK_RE = Regex("^\\d{1,2}:\\d{2}\\s?([AaPp][Mm])?$")
 
         /** Max gap between YouTube captures still counted as continuous watching. */
         const val YT_MAX_GAP_MS = 15_000L

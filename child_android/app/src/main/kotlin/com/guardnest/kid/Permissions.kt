@@ -80,6 +80,17 @@ object Permissions {
         return value
     }
 
+    /** How many required protections are still missing (for the setup notice). */
+    fun missingCount(ctx: Context): Int = listOf(
+        hasUsageAccess(ctx),
+        hasCallLog(ctx) && hasSms(ctx),
+        hasBatteryExemption(ctx),
+        hasDeviceAdmin(ctx),
+        hasOverlay(ctx),
+        hasAccessibility(ctx),
+        hasNotificationAccess(ctx),
+    ).count { !it }
+
     @Volatile private var cached = false
     @Volatile private var cachedAt = 0L
     private const val CACHE_MS = 3_000L

@@ -165,7 +165,7 @@ object MessageStore {
             }
 
             val learnsDay = entry.day <= 0L && dayStart > 0L
-            val learnsTime = entry.label.isBlank() && label.isNotBlank()
+            val learnsTime = !isClock(entry.label) && isClock(label)
             val learnsSide = entry.side == null && outgoing != null
             if (!learnsDay && !learnsTime && !learnsSide &&
                 now - entry.at < RESEND_TTL_MS
@@ -195,13 +195,20 @@ object MessageStore {
     private fun matches(e: Entry, day: Long, label: String, side: Boolean?): Boolean {
         if (day > 0L && e.day > 0L && e.day != day) return false
         if (side != null && e.side != null && e.side != side) return false
-        if (label.isNotEmpty() && e.label.isNotEmpty() &&
+        // Only two real clock labels can disagree. Anything else the scrape
+        // picked up (a sender name, "Yesterday") counts as not knowing the time,
+        // so the good reading upgrades that message instead of adding a second.
+        if (isClock(label) && isClock(e.label) &&
             timeKey(e.label) != timeKey(label)
         ) {
             return false
         }
         return true
     }
+
+    private fun isClock(label: String) = CLOCK.matches(label.trim())
+
+    private val CLOCK = Regex("^\\d{1,2}:\\d{2}\\s?([AaPp][Mm])?$")
 
     private fun nextSlot(loose: String, day: Long, label: String): Int {
         val group = groupKey(loose, day, label)

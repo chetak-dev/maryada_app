@@ -108,17 +108,22 @@ class WebFilterVpnService : VpnService() {
             .collection("rules").document("webFilter")
             .addSnapshotListener { snap, _ ->
                 if (snap == null || !snap.exists()) return@addSnapshotListener
+                // The protective categories always block; the family rule can
+                // only ADD sites/categories on top, never switch them off.
                 if (snap.getBoolean("enabled") == false) {
-                    blockedDomains = emptySet()
-                    enabledCategories = emptySet()
+                    blockedDomains = WebFilter.PROTECTIVE_CATEGORIES
+                        .flatMap { WebFilter.CATEGORY_SEEDS[it] ?: emptyList() }
+                        .toSet()
+                    enabledCategories = WebFilter.PROTECTIVE_CATEGORIES
+                    CategoryFeed.ensure(applicationContext, enabledCategories)
                     return@addSnapshotListener
                 }
                 val sites = (snap.get("blockedSites") as? List<*>)
                     ?.mapNotNull { (it as? String)?.lowercase()?.removePrefix("www.") }
                     ?: emptyList()
-                val cats = (snap.get("blockedCategories") as? List<*>)
+                val cats = ((snap.get("blockedCategories") as? List<*>)
                     ?.mapNotNull { it as? String }
-                    ?: emptyList()
+                    ?: emptyList()) + WebFilter.PROTECTIVE_CATEGORIES
                 val fromCats = cats.flatMap { WebFilter.CATEGORY_SEEDS[it] ?: emptyList() }
                 blockedDomains = (sites + fromCats).toSet()
                 enabledCategories = cats.toSet()

@@ -56,9 +56,9 @@ class HostDetailScreen extends StatelessWidget {
                         horizontal: AppSpacing.md, vertical: AppSpacing.xs),
                     leading: const Icon(Icons.tune_rounded,
                         color: AppColors.primary),
-                    title: const Text('Child limit',
+                    title: const Text('Device limit',
                         style: TextStyle(fontWeight: FontWeight.w700)),
-                    subtitle: Text('Currently ${host.maxChildren}'),
+                    subtitle: Text('Currently ${host.maxChildren} paired device(s)'),
                     trailing: const Icon(Icons.chevron_right_rounded,
                         color: AppColors.textMuted),
                     onTap: () => _editLimit(context),
@@ -168,13 +168,13 @@ class HostDetailScreen extends StatelessWidget {
     final n = await showDialog<int>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Child limit'),
+        title: const Text('Device limit'),
         content: TextField(
           controller: ctl,
           autofocus: true,
           keyboardType: TextInputType.number,
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: const InputDecoration(labelText: 'Max children'),
+          decoration: const InputDecoration(labelText: 'Max paired devices'),
         ),
         actions: [
           DialogCancelButton(onPressed: () => Navigator.pop(ctx)),

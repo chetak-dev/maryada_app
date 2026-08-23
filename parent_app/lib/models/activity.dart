@@ -54,7 +54,12 @@ class Alert {
   final String detail;
   final String timeAgo;
   final String childId;
-  const Alert(this.type, this.detail, this.timeAgo, {this.childId = ''});
+
+  /// The reporting device's parent-given name, so a family with several
+  /// devices can tell which one raised the alert. Empty on old alerts.
+  final String deviceName;
+  const Alert(this.type, this.detail, this.timeAgo,
+      {this.childId = '', this.deviceName = ''});
 }
 
 /// One day's total screen time (minutes) for the weekly bar chart.

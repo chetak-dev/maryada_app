@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../../data/site_policy_repository.dart';
-import '../../models/web_filter.dart';
 import '../../theme/tokens.dart';
 
 /// Site-admin editor for the global browser / safe-browsing policy. These apply
-/// to every child device and cannot be changed by org admins.
+/// to every child device and cannot be changed by org admins. The protective
+/// content categories are always on and deliberately not listed here.
 class WebPolicyScreen extends StatelessWidget {
   const WebPolicyScreen({super.key});
 
@@ -17,7 +17,6 @@ class WebPolicyScreen extends StatelessWidget {
         stream: SitePolicyRepository.instance.watchPolicy(),
         builder: (context, snap) {
           final p = snap.data ?? const WebPolicy();
-          final categories = demoCategories();
           return ListView(
             padding: const EdgeInsets.fromLTRB(
                 AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
@@ -88,48 +87,15 @@ class WebPolicyScreen extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(height: AppSpacing.lg),
-              Text('Blocked categories',
-                  style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: AppSpacing.sm),
-              Card(
-                child: Column(
-                  children: [
-                    for (var i = 0; i < categories.length; i++) ...[
-                      if (i > 0) const Divider(height: 1, indent: 56),
-                      SwitchListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                            horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-                        secondary: _catIcon(categories[i]),
-                        title: Text(categories[i].name,
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w700)),
-                        subtitle: Text(categories[i].description),
-                        value: p.blockedCategories.contains(categories[i].id),
-                        onChanged: (v) {
-                          final next = {...p.blockedCategories};
-                          if (v) {
-                            next.add(categories[i].id);
-                          } else {
-                            next.remove(categories[i].id);
-                          }
-                          SitePolicyRepository.instance
-                              .setPolicy(blockedCategories: next);
-                        },
-                      ),
-                    ],
-                  ],
-                ),
-              ),
               const SizedBox(height: AppSpacing.md),
               Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
                 child: Text(
-                  'These apply to every child device. Org admins cannot disable '
-                  'safe browsing, change these browser controls, or turn any '
-                  'category off — they can only add their own custom blocked '
-                  'sites.',
+                  'These apply to every child device. Unsafe content categories '
+                  '(adult, gambling, drugs, weapons, violence) are always '
+                  'blocked and are not configurable — the words they block on '
+                  'are listed under Content keywords.',
                   style: TextStyle(
                       color: AppColors.textSecondaryOf(context),
                       fontSize: 13),
@@ -150,15 +116,5 @@ class WebPolicyScreen extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadius.md),
         ),
         child: Icon(icon, color: color),
-      );
-
-  Widget _catIcon(WebCategory c) => Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-          color: c.color.withValues(alpha: 0.14),
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
-        child: Icon(c.icon, color: c.color),
       );
 }

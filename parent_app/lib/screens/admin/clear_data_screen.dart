@@ -308,46 +308,60 @@ class _AutoDeleteCard extends StatelessWidget {
       stream: SitePolicyRepository.instance.watchRetention(),
       builder: (context, snap) {
         final policy = snap.data ?? const RetentionPolicy();
+        final known =
+            _autoDeleteChoices.any((c) => c.$1 == policy.days);
         return Card(
-          child: Column(
-            children: [
-              for (final (days, label) in _autoDeleteChoices)
-                ListTile(
-                  dense: true,
-                  title: Text(label),
-                  onTap: () async {
-                    try {
-                      await SitePolicyRepository.instance
-                          .setRetentionDays(days);
-                    } catch (e) {
-                      if (context.mounted) {
-                        context.showError('Couldn’t save the window', e);
-                      }
-                    }
-                  },
-                  trailing: Icon(
-                    policy.days == days
-                        ? Icons.radio_button_checked_rounded
-                        : Icons.radio_button_unchecked_rounded,
-                    color: policy.days == days
-                        ? AppColors.primary
-                        : AppColors.textMuted,
-                  ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.auto_delete_rounded,
+                        color: policy.enabled
+                            ? AppColors.primary
+                            : AppColors.textMuted),
+                    const SizedBox(width: AppSpacing.md),
+                    const Expanded(
+                      child: Text('Keep activity for',
+                          style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                    DropdownButton<int>(
+                      value: known ? policy.days : 0,
+                      underline: const SizedBox.shrink(),
+                      borderRadius: BorderRadius.circular(AppRadius.md),
+                      items: [
+                        for (final (days, label) in _autoDeleteChoices)
+                          DropdownMenuItem(value: days, child: Text(label)),
+                      ],
+                      onChanged: (days) async {
+                        if (days == null) return;
+                        try {
+                          await SitePolicyRepository.instance
+                              .setRetentionDays(days);
+                        } catch (e) {
+                          if (context.mounted) {
+                            context.showError('Couldn’t save the window', e);
+                          }
+                        }
+                      },
+                    ),
+                  ],
                 ),
-              if (policy.enabled && policy.lastRunAt != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.md, 0, AppSpacing.md, AppSpacing.sm),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
+                if (policy.enabled && policy.lastRunAt != null)
+                  Padding(
+                    padding: const EdgeInsets.only(
+                        left: 40, bottom: AppSpacing.xs),
                     child: Text(
                       'Last run ${_ago(policy.lastRunAt!)}',
                       style: const TextStyle(
                           fontSize: 12, color: AppColors.textMuted),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         );
       },

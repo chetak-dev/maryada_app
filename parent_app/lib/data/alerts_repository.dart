@@ -25,6 +25,7 @@ class AlertsRepository {
                 (m['detail'] ?? '').toString(),
                 at != null ? timeAgo(at) : 'just now',
                 childId: (m['childId'] ?? '').toString(),
+                deviceName: (m['deviceName'] ?? '').toString(),
               );
             }).toList());
   }

@@ -25,12 +25,13 @@ class UserRepository {
   Future<AppUser> resolve(String uid, String email) async {
     final ref = _col.doc(uid);
     final snap = await ref.get();
-    if (snap.exists) return AppUser.fromMap(uid, snap.data()!);
+    final existing = snap.exists ? AppUser.fromMap(uid, snap.data()!) : null;
 
     final lower = email.trim().toLowerCase();
 
     // Bootstrap the site admin by email.
     if (lower == kBootstrapAdminEmail.toLowerCase()) {
+      if (existing != null) return existing;
       final u = AppUser(
         uid: uid,
         email: email,
@@ -42,30 +43,17 @@ class UserRepository {
       return u;
     }
 
+    if (existing != null && existing.isSiteAdmin) return existing;
+
     // Otherwise the account must have been granted access by the site admin.
-    // Find a matching, unused grant — first by an explicitly typed code, then
-    // by the account's email. The grant's email must match, so a code alone
-    // can't be redeemed by a different address.
+    // An unused grant is applied even when the account already exists, so
+    // re-granting someone view-only takes effect on their next sign-in.
     Invite? grant;
-
-    final typed = InvitesRepository.instance.pendingCode;
-    if (typed != null && typed.trim().isNotEmpty) {
-      try {
-        final inv = await InvitesRepository.instance.findByCode(typed);
-        if (inv != null && !inv.used && inv.email.toLowerCase() == lower) {
-          grant = inv;
-        }
-      } catch (_) {}
-      InvitesRepository.instance.pendingCode = null;
-    }
-
-    if (grant == null) {
-      try {
-        final doc = await InvitesRepository.instance.findUnusedForEmail(lower);
-        if (doc != null) grant = Invite.fromMap(doc.id, doc.data());
-      } catch (_) {
-        // Ignore lookup failures; treated as no grant below.
-      }
+    try {
+      final inv = await InvitesRepository.instance.findForEmail(lower);
+      if (inv != null && !inv.used) grant = inv;
+    } catch (_) {
+      // Ignore lookup failures; treated as no grant below.
     }
 
     if (grant != null) {
@@ -75,7 +63,9 @@ class UserRepository {
         role: UserRole.orgAdmin,
         access: grant.access,
         maxChildren: grant.maxChildren,
+        suspended: existing?.suspended ?? false,
         inviteCode: grant.code,
+        familyId: grant.familyId,
       );
       await ref.set(u.toCreateMap());
       try {
@@ -83,6 +73,8 @@ class UserRepository {
       } catch (_) {}
       return u;
     }
+
+    if (existing != null) return existing;
 
     // No grant — record a blocked account so the site admin can see them, and
     // show the "access pending" screen.

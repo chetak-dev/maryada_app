@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 
+import '../../config.dart';
 import '../../data/user_repository.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dialog_buttons.dart';
-import '../admin/admin_tools_screen.dart';
 
 /// One profile screen for both site and org admins: shows the signed-in account
-/// (login info) and role-appropriate actions — for a site admin: web filtering,
-/// publish app update and clear data — plus sign out.
+/// (login info) and lets them sign out. Admin tools live on the site-admin
+/// console itself, not here.
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
@@ -53,13 +53,14 @@ class ProfileScreen extends StatelessWidget {
   Widget _body(BuildContext context, AppUser? u) {
     final theme = Theme.of(context);
     final email = u?.email ?? AuthService.instance.currentUser?.email ?? '—';
-    final isSiteAdmin = u?.isSiteAdmin ?? false;
     final roleLabel = u == null
         ? 'Signed in'
         : u.isSiteAdmin
             ? 'Site admin'
+            // Deliberately silent about view vs edit — the access level is
+            // between the administrator and this app, not shown to parents.
             : u.isOrgAdmin
-                ? 'Parent · ${u.access == AccessLevel.edit ? 'Edit access' : 'View only'}'
+                ? 'Parent'
                 : 'Account';
 
     return ListView(
@@ -99,20 +100,6 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
         ),
-        if (isSiteAdmin) ...[
-          const SizedBox(height: AppSpacing.lg),
-          Text('Admin', style: theme.textTheme.titleMedium),
-          const SizedBox(height: AppSpacing.sm),
-          Card(
-            child: _tile(
-              context,
-              icon: Icons.admin_panel_settings_rounded,
-              title: 'Admin tools',
-              subtitle: 'Web filtering, app updates & data',
-              screen: const AdminToolsScreen(),
-            ),
-          ),
-        ],
         const SizedBox(height: AppSpacing.lg),
         Text('Account', style: theme.textTheme.titleMedium),
         const SizedBox(height: AppSpacing.sm),
@@ -128,32 +115,17 @@ class ProfileScreen extends StatelessWidget {
         ),
         const SizedBox(height: AppSpacing.xl),
         Center(
-          child: Text('Maryada · v1.0.0',
+          child: Text('Maryada · $kAppVersionLabel',
+              style:
+                  theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted)),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Center(
+          child: Text('Made with ❤️ by ISKCON Brahmapur',
               style:
                   theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted)),
         ),
       ],
-    );
-  }
-
-  Widget _tile(
-    BuildContext context, {
-    required IconData icon,
-    required String title,
-    required String subtitle,
-    required Widget screen,
-    Color iconColor = AppColors.primary,
-  }) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-      leading: Icon(icon, color: iconColor),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text(subtitle),
-      trailing:
-          const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
-      onTap: () =>
-          Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen)),
     );
   }
 }

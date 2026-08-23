@@ -1,5 +1,6 @@
 ﻿import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../data/app_update_repository.dart';
@@ -52,7 +53,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           SizedBox(width: AppSpacing.xs)
         ],
       ),
-      body: Padding(
+      // Scrollable only as a safety net: the sections are sized to fit one
+      // screen, this just keeps a short screen from overflowing.
+      body: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.md),
         child: Column(
@@ -79,9 +82,9 @@ class _GreetingHeader extends StatelessWidget {
 
   String get _greeting {
     final h = DateTime.now().hour;
-    if (h < 12) return 'Good morning';
-    if (h < 17) return 'Good afternoon';
-    return 'Good evening';
+    if (h < 12) return 'Good Morning';
+    if (h < 17) return 'Good Afternoon';
+    return 'Good Evening';
   }
 
   String get _date {
@@ -120,7 +123,8 @@ class _GreetingHeader extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(AppSpacing.md),
+            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg,
+                AppSpacing.lg, AppSpacing.md),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -128,34 +132,34 @@ class _GreetingHeader extends StatelessWidget {
                   _date.toUpperCase(),
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.75),
-                    fontSize: 11,
+                    fontSize: 11.5,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1.0,
                   ),
                 ),
-                const SizedBox(height: 5),
+                const SizedBox(height: AppSpacing.sm),
                 Text(
                   _greeting,
                   style: const TextStyle(
                     color: Colors.white,
-                    fontSize: 27,
+                    fontSize: 29,
                     fontWeight: FontWeight.w800,
                     letterSpacing: -0.5,
-                    height: 1.1,
+                    height: 1.2,
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 6),
                 Text(
-                  'An Initiative by ISKCON Brahmapur',
+                  'Made with ❤️ by ISKCON Brahmapur',
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.72),
-                    fontSize: 11.5,
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-                const SizedBox(height: AppSpacing.md),
+                const SizedBox(height: AppSpacing.lg),
                 Container(height: 1, color: Colors.white.withValues(alpha: 0.18)),
-                const SizedBox(height: AppSpacing.sm),
+                const SizedBox(height: AppSpacing.md),
                 _FamilyPulse(uid: uid),
               ],
             ),
@@ -167,26 +171,55 @@ class _GreetingHeader extends StatelessWidget {
 }
 
 /// The one-line answer to "is everything alright?", inside the banner.
-class _FamilyPulse extends StatelessWidget {
+class _FamilyPulse extends StatefulWidget {
   const _FamilyPulse({required this.uid});
   final String? uid;
 
   @override
+  State<_FamilyPulse> createState() => _FamilyPulseState();
+}
+
+class _FamilyPulseState extends State<_FamilyPulse> {
+  // Subscribed once; a stream built inside build() re-subscribes on every
+  // rebuild and each fresh subscription waits on a server round trip.
+  late final Stream<List<({Child child, String familyId})>>? _kids =
+      widget.uid == null
+          ? null
+          : FamilyRepository.instance.watchMyChildren(widget.uid);
+  late final Stream<String>? _famId = widget.uid == null
+      ? null
+      : FamilyRepository.instance.watchMyFamilyId(widget.uid!);
+
+  @override
   Widget build(BuildContext context) {
-    if (uid == null) {
-      return const _PulseRow(profiles: 0, protected: 0, attention: 0);
+    final kidsStream = _kids;
+    if (kidsStream == null) {
+      return const _PulseRow(profiles: 0, devices: 0);
     }
     return StreamBuilder<List<({Child child, String familyId})>>(
-      stream: FamilyRepository.instance.watchAllChildren(),
+      stream: kidsStream,
       builder: (context, snap) {
-        final kids = snap.data ?? const <({Child child, String familyId})>[];
-        final protected = kids
-            .where((k) => k.child.effectiveStatus == ChildStatus.online)
-            .length;
-        return _PulseRow(
-          profiles: kids.length,
-          protected: protected,
-          attention: kids.length - protected,
+        final profiles =
+            (snap.data ?? const <({Child child, String familyId})>[]).length;
+        return StreamBuilder<String>(
+          stream: _famId,
+          builder: (context, famSnap) {
+            final familyId = famSnap.data ?? '';
+            if (familyId.isEmpty) {
+              return _PulseRow(profiles: profiles, devices: 0);
+            }
+            // Live registrations only — a removed device's doc is deleted.
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: Db.instance
+                  .collection('devices')
+                  .where('familyId', isEqualTo: familyId)
+                  .snapshots(),
+              builder: (context, devSnap) => _PulseRow(
+                profiles: profiles,
+                devices: devSnap.data?.size ?? 0,
+              ),
+            );
+          },
         );
       },
     );
@@ -196,13 +229,11 @@ class _FamilyPulse extends StatelessWidget {
 class _PulseRow extends StatelessWidget {
   const _PulseRow({
     required this.profiles,
-    required this.protected,
-    required this.attention,
+    required this.devices,
   });
 
   final int profiles;
-  final int protected;
-  final int attention;
+  final int devices;
 
   @override
   Widget build(BuildContext context) {
@@ -211,9 +242,9 @@ class _PulseRow extends StatelessWidget {
         _PulseStat(
             value: profiles, label: profiles == 1 ? 'Profile' : 'Profiles'),
         _PulseDivider(),
-        _PulseStat(value: protected, label: 'Protected'),
-        _PulseDivider(),
-        _PulseStat(value: attention, label: 'Need attention'),
+        _PulseStat(
+            value: devices,
+            label: devices == 1 ? 'Device linked' : 'Devices linked'),
       ],
     );
   }
@@ -225,7 +256,7 @@ class _PulseDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         width: 1,
-        height: 26,
+        height: 30,
         color: Colors.white.withValues(alpha: 0.18),
       );
 }
@@ -244,19 +275,19 @@ class _PulseStat extends StatelessWidget {
             '$value',
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 19,
+              fontSize: 21,
               fontWeight: FontWeight.w800,
               height: 1.1,
             ),
           ),
-          const SizedBox(height: 1),
+          const SizedBox(height: 3),
           Text(
             label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.75),
-              fontSize: 10.5,
+              fontSize: 11,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -353,19 +384,28 @@ class _WebFilterControlTile extends StatelessWidget {
 
 /// Family-wide control tiles. Supplies the live familyId (when connected) so
 /// editors can persist; opens in demo mode otherwise.
-class _FamilyControls extends StatelessWidget {
+class _FamilyControls extends StatefulWidget {
   const _FamilyControls({required this.uid});
   final String? uid;
 
   @override
+  State<_FamilyControls> createState() => _FamilyControlsState();
+}
+
+class _FamilyControlsState extends State<_FamilyControls> {
+  late final Stream<String>? _stream = widget.uid == null
+      ? null
+      : FamilyRepository.instance.watchMyFamilyId(widget.uid!);
+
+  @override
   Widget build(BuildContext context) {
-    if (uid == null) return const _ControlsCard(familyId: null);
-    return StreamBuilder<List<FamilyModel>>(
-      stream: FamilyRepository.instance.watchFamilies(uid!),
+    final stream = _stream;
+    if (stream == null) return const _ControlsCard(familyId: null);
+    return StreamBuilder<String>(
+      stream: stream,
       builder: (context, snap) {
-        final fams = snap.data ?? const <FamilyModel>[];
-        final familyId = fams.isEmpty ? null : fams.first.id;
-        return _ControlsCard(familyId: familyId);
+        final familyId = snap.data ?? '';
+        return _ControlsCard(familyId: familyId.isEmpty ? null : familyId);
       },
     );
   }
@@ -429,6 +469,16 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
   int _latestVersionCode = 0;
   StreamSubscription<AppUpdateConfig>? _updateSub;
 
+  // Subscribed once. Built inside build() these re-subscribed on every rebuild
+  // (the 30s ticker alone rebuilds constantly), so a freshly created profile
+  // waited a full server round trip instead of appearing from the local write.
+  late final Stream<AppUser?> _userStream =
+      UserRepository.instance.watch(widget.uid!);
+  late final Stream<List<({Child child, String familyId})>> _kidsStream =
+      FamilyRepository.instance.watchMyChildren(widget.uid);
+  late final Stream<List<FamilyModel>> _famStream =
+      FamilyRepository.instance.watchFamilies(widget.uid!);
+
   @override
   void initState() {
     super.initState();
@@ -482,41 +532,81 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
       );
     }
 
-    final repo = FamilyRepository.instance;
     return StreamBuilder<AppUser?>(
-      stream: UserRepository.instance.watch(uid),
+      stream: _userStream,
       builder: (context, userSnap) {
+        // Don't act before the account record arrives: an early empty snapshot
+        // used to race provisioning into creating a spare "My Family".
+        if (userSnap.connectionState == ConnectionState.waiting) {
+          return _childrenLoader();
+        }
         final maxChildren = userSnap.data?.maxChildren ?? kDefaultMaxChildren;
-        // Every org admin sees ALL children across all families.
+        final grantedFamilyId = userSnap.data?.familyId ?? '';
         return StreamBuilder<List<({Child child, String familyId})>>(
-          stream: repo.watchAllChildren(),
+          stream: _kidsStream,
           builder: (context, kidSnap) {
             if (kidSnap.connectionState == ConnectionState.waiting &&
                 !kidSnap.hasData) {
               return _childrenLoader();
             }
             final kids = kidSnap.data ?? const [];
-            // The org admin's own family is only the target for "Add child";
-            // provision it lazily for editors. Viewing all children never
-            // depends on having your own family.
             return StreamBuilder<List<FamilyModel>>(
-              stream: repo.watchFamilies(uid),
+              stream: _famStream,
               builder: (context, famSnap) {
                 final families = famSnap.data ?? const <FamilyModel>[];
                 final famReady =
                     famSnap.connectionState != ConnectionState.waiting;
-                final ownFamilyId =
-                    families.isEmpty ? null : families.first.id;
-                if (canEdit && famReady && families.isEmpty && !_provisioning) {
+
+                // The grant's family is the only one this account belongs to.
+                // Reconcile membership towards it: join it, leave the rest —
+                // a stale membership must not keep showing another household.
+                final isMember = families.any((f) => f.id == grantedFamilyId);
+                final strays = grantedFamilyId.isEmpty
+                    ? const <FamilyModel>[]
+                    : families.where((f) => f.id != grantedFamilyId).toList();
+                if (famReady &&
+                    grantedFamilyId.isNotEmpty &&
+                    (!isMember || strays.isNotEmpty) &&
+                    !_provisioning) {
                   _provisioning = true;
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    FamilyRepository.instance
-                        .createFamily(name: 'My Family', ownerUid: uid);
+                  WidgetsBinding.instance.addPostFrameCallback((_) async {
+                    try {
+                      if (!isMember) {
+                        await FamilyRepository.instance
+                            .joinFamily(grantedFamilyId, uid);
+                      }
+                      for (final f in strays) {
+                        await FamilyRepository.instance.leaveFamily(f.id, uid);
+                      }
+                    } catch (_) {
+                      // Retried on the next snapshot.
+                    } finally {
+                      _provisioning = false;
+                    }
                   });
                 }
-                if (families.isNotEmpty) _provisioning = false;
 
+                // No grant-assigned family: nothing to show or create. The old
+                // fallback made every such account its own "My Family", which
+                // is how parents ended up in families they shouldn't see.
+                if (grantedFamilyId.isEmpty) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _SectionLabel(title: 'Your family'),
+                      const SizedBox(height: AppSpacing.sm),
+                      const _NoFamilyCard(),
+                    ],
+                  );
+                }
+
+                final ownFamilyId = isMember ? grantedFamilyId : null;
                 final canAdd = canEdit && ownFamilyId != null;
+                // The household's name, exactly as the site admin entered it.
+                var familyName = '';
+                for (final f in families) {
+                  if (f.id == grantedFamilyId) familyName = f.name.trim();
+                }
                 void openAll([ChildFilter filter = ChildFilter.all]) {
                   Navigator.of(context).push(
                     MaterialPageRoute(
@@ -532,21 +622,9 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
                 }
 
                 // The strip's Add chip creates a profile; devices are paired
-                // from inside the profile.
+                // from inside the profile (that's where the device limit is
+                // enforced — profiles themselves are unlimited).
                 void addProfile() {
-                  final ownCount = kids
-                      .where((k) => k.familyId == ownFamilyId)
-                      .length;
-                  if (ownCount >= maxChildren) {
-                    ScaffoldMessenger.of(context)
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(SnackBar(
-                        content: Text(
-                          'Child limit reached ($maxChildren). Ask your admin to raise it.',
-                        ),
-                      ));
-                    return;
-                  }
                   showNewProfileDialog(context, ownFamilyId!);
                 }
 
@@ -554,7 +632,9 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _SectionLabel(
-                      title: 'Your family',
+                      title: familyName.isEmpty
+                          ? 'Family'
+                          : 'Family : $familyName',
                       trailing: _headerActions(onSeeAll: openAll),
                     ),
                     const SizedBox(height: AppSpacing.sm),
@@ -588,6 +668,37 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
           ),
         ),
       );
+}
+
+/// Shown when the site admin hasn't assigned this account a family yet.
+class _NoFamilyCard extends StatelessWidget {
+  const _NoFamilyCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpacing.md),
+        child: Column(
+          children: [
+            const Icon(Icons.home_work_outlined,
+                size: 34, color: AppColors.textMuted),
+            const SizedBox(height: AppSpacing.xs),
+            const Text('No family assigned',
+                style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Your administrator hasn\u2019t linked this account to a family '
+              'yet. Ask them to grant your email access again.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 12.5, color: AppColors.textSecondaryOf(context)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _EmptyChildren extends StatelessWidget {
@@ -695,6 +806,9 @@ class _AvatarChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = child.effectiveStatus;
     final online = status == ChildStatus.online;
+    // No device yet — no status: plain grey ring, no badge.
+    final ringColor =
+        child.paired ? status.color : AppColors.borderOf(context);
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.md),
       onTap: () => Navigator.of(context).push(
@@ -719,7 +833,7 @@ class _AvatarChip extends StatelessWidget {
                   padding: const EdgeInsets.all(2),
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: status.color, width: 2.5),
+                    border: Border.all(color: ringColor, width: 2.5),
                   ),
                   child: CircleAvatar(
                     radius: 21,
@@ -734,28 +848,29 @@ class _AvatarChip extends StatelessWidget {
                     ),
                   ),
                 ),
-                Positioned(
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    width: 14,
-                    height: 14,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: status.color,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                          color: AppColors.surfaceOf(context), width: 2),
-                    ),
-                    child: Icon(
-                      online
-                          ? Icons.check_rounded
-                          : Icons.priority_high_rounded,
-                      size: 9,
-                      color: Colors.white,
+                if (child.paired)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 14,
+                      height: 14,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: status.color,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                            color: AppColors.surfaceOf(context), width: 2),
+                      ),
+                      child: Icon(
+                        online
+                            ? Icons.check_rounded
+                            : Icons.priority_high_rounded,
+                        size: 9,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
             const SizedBox(height: 5),

@@ -5,11 +5,15 @@ import 'package:flutter/services.dart';
 
 import '../../data/db.dart';
 import '../../data/family_repository.dart';
+import '../../data/user_repository.dart';
 import '../../models/child.dart';
+import '../../services/auth_service.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/access_scope.dart';
 import '../../widgets/feedback.dart';
 import '../../widgets/brand_mark.dart';
 import '../../widgets/net_guard.dart';
+import '../../widgets/read_only_banner.dart';
 
 /// Pairs a new device to an existing profile: name the device, generate a
 /// one-time code, enter it on the device. Reached from the profile's Devices
@@ -68,7 +72,40 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     });
   }
 
+  /// The admin's limit counts paired devices across the family — profiles are
+  /// free, devices are what's scarce. True (and explains itself) at the cap.
+  Future<bool> _deviceLimitReached() async {
+    final uid = AuthService.instance.currentUser?.uid;
+    if (uid == null) return false;
+    try {
+      final me = await UserRepository.instance.watch(uid).first;
+      final max = me?.maxChildren ?? 0;
+      if (max <= 0) return false;
+      final devices = await Db.instance
+          .collection('devices')
+          .where('familyId', isEqualTo: widget.familyId)
+          .count()
+          .get();
+      if ((devices.count ?? 0) < max) return false;
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text(
+                'Device limit reached ($max). Ask your admin to raise it.'),
+          ));
+      }
+      return true;
+    } catch (_) {
+      // Counting is best-effort; pairing itself stays guarded by the rules.
+      return false;
+    }
+  }
+
   Future<void> _generate() async {
+    // Pairing a device is a change, so view-only access can't do it — the
+    // entry point is hidden for them, but this screen must refuse on its own.
+    if (!AccessScope.of(context)) return;
     final deviceName = _deviceName.text.trim();
     if (deviceName.isEmpty) {
       setState(() => _nameError = 'Give the device a name first.');
@@ -76,6 +113,8 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     }
     setState(() => _nameError = null);
     if (!await Net.require(context)) return;
+    if (!mounted) return;
+    if (await _deviceLimitReached()) return;
     if (!mounted) return;
     setState(() => _busy = true);
     try {
@@ -114,9 +153,12 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final name = widget.child.name;
+    final canEdit = AccessScope.of(context);
     return Scaffold(
       appBar: AppBar(title: Text('Add a device · $name')),
-      body: ListView(
+      body: !canEdit
+          ? const ReadOnlyBanner()
+          : ListView(
         padding: const EdgeInsets.fromLTRB(
             AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
         children: [

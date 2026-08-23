@@ -39,6 +39,8 @@ object AlertLog {
                         "type" to type,
                         "detail" to detail,
                         "childId" to cid,
+                        // Which of the child's devices raised it.
+                        "deviceName" to ChildStore.deviceName(ctx),
                         "at" to FieldValue.serverTimestamp(),
                     )
                 )

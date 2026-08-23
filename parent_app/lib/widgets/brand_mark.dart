@@ -72,18 +72,18 @@ class BrandLoader extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const BrandMark(size: 132, showGlow: false),
-            const SizedBox(height: AppSpacing.md),
+            const BrandMark(size: 84, showGlow: false),
+            const SizedBox(height: AppSpacing.sm),
             Text(
               'Maryada',
-              style: theme.textTheme.headlineSmall?.copyWith(
+              style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w800,
-                letterSpacing: -0.5,
+                letterSpacing: -0.3,
               ),
             ),
-            const SizedBox(height: AppSpacing.xl),
+            const SizedBox(height: AppSpacing.lg),
             SizedBox(
-              width: 132,
+              width: 96,
               child: LinearProgressIndicator(
                 minHeight: 3,
                 color: AppColors.primary,

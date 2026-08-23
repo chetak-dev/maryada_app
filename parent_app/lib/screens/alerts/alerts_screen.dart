@@ -5,7 +5,6 @@ import '../../data/db.dart';
 import '../../data/family_repository.dart';
 import '../../models/activity.dart';
 import '../../models/child.dart';
-import '../../models/family.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/profile_button.dart';
 import '../../widgets/theme_toggle_button.dart';
@@ -36,23 +35,22 @@ class AlertsScreen extends StatelessWidget {
   }
 }
 
-/// Resolves the guardian's first family, then streams its children (for names)
-/// and its alert feed, grouped per child.
+/// Resolves the guardian's granted family, then streams its children (for
+/// names) and its alert feed, grouped per child.
 class _LiveAlerts extends StatelessWidget {
   const _LiveAlerts({required this.uid});
   final String uid;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<FamilyModel>>(
-      stream: FamilyRepository.instance.watchFamilies(uid),
+    return StreamBuilder<String>(
+      stream: FamilyRepository.instance.watchMyFamilyId(uid),
       builder: (context, famSnap) {
         if (famSnap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
-        final families = famSnap.data ?? const <FamilyModel>[];
-        if (families.isEmpty) return _EmptyAlerts();
-        final familyId = families.first.id;
+        final familyId = famSnap.data ?? '';
+        if (familyId.isEmpty) return _EmptyAlerts();
         return StreamBuilder<List<Child>>(
           stream: FamilyRepository.instance.watchChildren(familyId),
           builder: (context, kidSnap) {
@@ -167,6 +165,11 @@ class _AlertRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Profile groups the card; the row names the exact device that reported.
+    final meta = [
+      if (alert.detail.isNotEmpty) alert.detail,
+      if (alert.deviceName.isNotEmpty) 'Device: ${alert.deviceName}',
+    ].join('\n');
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: Container(
@@ -180,7 +183,7 @@ class _AlertRow extends StatelessWidget {
       ),
       title: Text(alert.type.label,
           style: const TextStyle(fontWeight: FontWeight.w600)),
-      subtitle: alert.detail.isEmpty ? null : Text(alert.detail),
+      subtitle: meta.isEmpty ? null : Text(meta),
       trailing: Text(alert.timeAgo,
           style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
     );

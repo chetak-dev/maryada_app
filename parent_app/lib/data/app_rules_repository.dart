@@ -87,6 +87,9 @@ class AppRulesRepository {
     final names = <String, String>{};
     final owners = <String, List<String>>{};
     for (final kid in kids.docs) {
+      // A profile whose devices were all removed keeps its old report doc;
+      // its apps must vanish from this list the moment it unpairs.
+      if (kid.data()['paired'] != true) continue;
       final raw = (kid.data()['name'] as String?)?.trim();
       final label = (raw == null || raw.isEmpty) ? 'Child' : raw;
       for (final a in await _childApps(kid.reference)) {
@@ -110,12 +113,15 @@ class AppRulesRepository {
     return list;
   }
 
-  /// Loads the installed apps reported by a single child device.
+  /// Loads the installed apps reported by a single child device. Empty once
+  /// the profile has no linked device — stale reports don't show.
   Future<List<InstalledAppInfo>> loadInstalledAppsForChild(
     String familyId,
     String childId,
   ) async {
     final ref = Db.families.doc(familyId).collection('children').doc(childId);
+    final childDoc = await ref.get();
+    if (childDoc.data()?['paired'] != true) return const [];
     final byPackage = <String, String>{};
     _mergeReport(await _childApps(ref), byPackage);
     return _sorted(byPackage);

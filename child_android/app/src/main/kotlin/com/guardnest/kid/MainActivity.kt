@@ -2,6 +2,7 @@ package com.guardnest.kid
 
 import android.Manifest
 import android.app.Activity
+import android.app.Dialog
 import android.app.admin.DevicePolicyManager
 import android.content.Context
 import android.content.Intent
@@ -10,7 +11,10 @@ import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.Uri
 import android.net.VpnService
 import android.os.Build
@@ -23,7 +27,10 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -120,11 +127,18 @@ class MainActivity : Activity() {
     private lateinit var linkProgress: ProgressBar
     private var linking = false
     private var unlinking = false
-    private var tempAccessBtn: TextView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.decorView.setBackgroundColor(cBg)
+        // The setup notice is silently dropped without this on Android 13+,
+        // and Device Owner (which would pin it on) isn't set up yet.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4)
+        }
         render()
     }
 
@@ -137,6 +151,8 @@ class MainActivity : Activity() {
         render()
         // Clears the banking-mode notice the moment the last permission is back.
         TempAccessNotice.sync(this)
+        // Posts (or clears) the "setup isn't finished" reminder.
+        SetupNotice.sync(this)
         wasPaired = ChildStore.isPaired(this)
         uiHandler.removeCallbacks(pairingWatch)
         uiHandler.postDelayed(pairingWatch, 1000)
@@ -237,20 +253,22 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- UI build
 
-    private fun buildUi(): ScrollView {
+    /** Header and footer stay put; only the cards between them scroll. */
+    private fun buildUi(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(cBg)
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
         }
 
         root.addView(buildHeader())
 
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(20), dp(20), dp(28))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-            )
+            setPadding(dp(18), dp(16), dp(18), dp(16))
         }
 
         if (!permissionsComplete()) {
@@ -260,39 +278,42 @@ class MainActivity : Activity() {
             body.addView(buildStatusCard())
             if (ChildStore.isPaired(this)) {
                 buildUsageCard()?.let {
-                    body.addView(gap(dp(16)))
+                    body.addView(gap(dp(14)))
                     body.addView(it)
                 }
             }
-            body.addView(gap(dp(16)))
+            body.addView(gap(dp(14)))
             body.addView(buildPairingCard())
-            if (ChildStore.isPaired(this)) {
-                body.addView(gap(dp(12)))
-                body.addView(buildTemporaryAccessButton())
-            }
         }
 
-        root.addView(body)
-
-        root.addView(buildVersionFooter())
-
-        return ScrollView(this).apply {
+        val scroller = ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(cBg)
-            addView(root)
+            clipToPadding = false
+            addView(
+                body,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+            )
         }
+        root.addView(scroller)
+        root.addView(buildVersionFooter())
+
+        return root
     }
 
-    /** The installed app version, e.g. "Version 1.0.1 (2)". */
+    /** The installed app version, e.g. "v1.0.0(0)". */
     private fun versionLabel(): String {
         return try {
             val info = packageManager.getPackageInfo(packageName, 0)
-            val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                info.longVersionCode
-            } else {
-                @Suppress("DEPRECATION") info.versionCode.toLong()
-            }
-            "Version ${info.versionName} (${code})"
+            // The build shown to the user restarts at 0 for the stable release;
+            // versionCode keeps climbing because updates depend on it.
+            "v${info.versionName}($BUILD_LABEL)"
         } catch (_: Exception) {
             ""
         }
@@ -301,13 +322,24 @@ class MainActivity : Activity() {
     /** Credit line pinned at the very bottom of the screen. */
     private fun buildVersionFooter(): View {
         return TextView(this).apply {
-            text = "An Initiative by ISKCON Brahmapur"
+            text = "Made with \u2764\uFE0F by ISKCON Brahmapur"
             textSize = 12f
             setTextColor(cMuted)
             gravity = Gravity.CENTER
             typeface = Typeface.DEFAULT_BOLD
             setBackgroundColor(cBg)
-            setPadding(dp(16), dp(4), dp(16), dp(16))
+            setPadding(dp(16), dp(8), dp(16), dp(12))
+            // Sits above the gesture bar rather than behind it.
+            setOnApplyWindowInsetsListener { v, insets ->
+                val bottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    insets.getInsets(WindowInsets.Type.systemBars()).bottom
+                } else {
+                    @Suppress("DEPRECATION") insets.systemWindowInsetBottom
+                }
+                v.setPadding(dp(16), dp(8), dp(16), bottom + dp(10))
+                insets
+            }
+            requestApplyInsets()
         }
     }
 
@@ -315,45 +347,53 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(22), dp(52), dp(22), dp(34))
+            // targetSdk 35 draws under the status bar, so the top padding is
+            // whatever the system actually reserves — not a guessed constant.
+            setPadding(dp(20), dp(44), dp(20), dp(18))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(cPrimary, Color.parseColor("#7C3AED"))
             ).apply {
-                val r = dp(30).toFloat()
+                val r = dp(26).toFloat()
                 cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, r, r, r, r)
             }
-            elevation = dp(10).toFloat()
+            elevation = dp(8).toFloat()
+            setOnApplyWindowInsetsListener { v, insets ->
+                val top = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    insets.getInsets(WindowInsets.Type.systemBars()).top
+                } else {
+                    @Suppress("DEPRECATION") insets.systemWindowInsetTop
+                }
+                v.setPadding(dp(20), top + dp(12), dp(20), dp(18))
+                insets
+            }
+            requestApplyInsets()
         }
 
-        // Shield mark — rounded-square badge (mirrors the parent brand mark)
-        header.addView(TextView(this).apply {
-            text = "\uD83D\uDEE1"
-            textSize = 26f
-            gravity = Gravity.CENTER
-            val size = dp(56)
-            background = rounded(Color.parseColor("#FFFFFF"), dp(18), Color.TRANSPARENT, 0)
-                .apply { alpha = 60 }
+        // Brand mark — the transparent artwork as-is, no backing card.
+        header.addView(ImageView(this).apply {
+            setImageResource(R.drawable.maryada_logo)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            val size = dp(48)
             layoutParams = LinearLayout.LayoutParams(size, size)
-            setPadding(0, dp(6), 0, 0)
         })
 
         header.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, 0, 0)
+            setPadding(dp(12), 0, 0, 0)
             layoutParams = LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
             )
             addView(TextView(this@MainActivity).apply {
                 text = "Maryada"
                 setTextColor(Color.WHITE)
-                textSize = 22f
+                textSize = 21f
                 typeface = Typeface.DEFAULT_BOLD
             })
             addView(TextView(this@MainActivity).apply {
                 text = versionLabel()
                 setTextColor(Color.parseColor("#E0E7FF"))
-                textSize = 13f
+                textSize = 12f
             })
         })
 
@@ -434,43 +474,36 @@ class MainActivity : Activity() {
 
         col.addView(permissionRow(
             "\uD83D\uDCCA", "Usage access",
-            "Lets your family see screen time and app usage.",
             hasUsageAccess()
         ) { grantUsage() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDCDE", "Calls & messages",
-            "Lets your family review recent calls and SMS messages.",
             hasCallLog() && hasSms()
         ) { grantCallsAndMessages() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDD0B", "Keep protection running",
-            "Allow the app to run in the background so it can’t be turned off.",
             hasBatteryExemption()
         ) { grantBattery() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDEAB", "App blocking",
-            "Turn on Maryada in Accessibility so blocked apps can be stopped.",
             hasAccessibility()
         ) { grantAccessibility() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDD12", "Lock when paused",
-            "Allow display over other apps so the device can be fully paused.",
             hasOverlay()
         ) { grantOverlay() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDEE1", "Prevent removal",
-            "Activate device admin so Maryada can’t be removed without a parent.",
             hasDeviceAdmin()
         ) { grantDeviceAdmin() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDD14", "Notification access",
-            "Allow Notification access so your family sees more complete activity.",
             hasNotificationAccess()
         ) { grantNotificationAccess() })
 
@@ -489,7 +522,6 @@ class MainActivity : Activity() {
     private fun permissionRow(
         emoji: String,
         title: String,
-        desc: String,
         granted: Boolean,
         onGrant: () -> Unit,
     ): View {
@@ -517,36 +549,21 @@ class MainActivity : Activity() {
             setTextColor(cInk)
             typeface = Typeface.DEFAULT_BOLD
         })
-        texts.addView(TextView(this).apply {
-            text = desc
-            textSize = 12f
-            setTextColor(cMuted)
-            setPadding(0, dp(2), 0, 0)
-        })
         row.addView(texts)
 
         if (granted) {
             row.addView(TextView(this).apply {
                 text = "\u2713"
-                textSize = 22f
+                textSize = 20f
                 setTextColor(cAccent)
                 typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                val s = dp(32)
+                background = circle(dk("#DCFCE7", "#173a25"))
+                layoutParams = LinearLayout.LayoutParams(s, s)
             })
         } else {
-            row.addView(TextView(this).apply {
-                text = "Enable"
-                textSize = 14f
-                setTextColor(Color.WHITE)
-                typeface = Typeface.DEFAULT_BOLD
-                gravity = Gravity.CENTER
-                setPadding(dp(16), dp(9), dp(16), dp(9))
-                background = GradientDrawable(
-                    GradientDrawable.Orientation.LEFT_RIGHT,
-                    intArrayOf(cPrimary, cPrimaryDark)
-                ).apply { cornerRadius = dp(10).toFloat() }
-                isClickable = true
-                setOnClickListener { onGrant() }
-            })
+            row.addView(tonalButton("Enable") { onGrant() })
         }
         c.addView(row)
         return c
@@ -905,45 +922,6 @@ class MainActivity : Activity() {
     }
 
     /**
-     * A prominent "Temporary Access" button. Turns off ONLY the accessibility
-     * permission so a strict banking app can run; the lockbox then keeps every
-     * other app locked until the child turns Accessibility back on.
-     */
-    private fun buildTemporaryAccessButton(): View {
-        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val btn = TextView(this).apply {
-            text = "Request Temporary Access"
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(15), dp(16), dp(15))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(Color.parseColor("#F59E0B"), Color.parseColor("#D97706"))
-            ).apply { cornerRadius = dp(14).toFloat() }
-            isClickable = true
-            setOnClickListener { onTemporaryAccess() }
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-        tempAccessBtn = btn
-        col.addView(btn)
-        col.addView(TextView(this).apply {
-            text = "Turns off monitoring so you can use a banking app. Every " +
-                "other app stays locked and the app still can’t be removed. " +
-                "Turn Maryada’s Accessibility back on to restore protection."
-            textSize = 12f
-            setTextColor(cMuted)
-            gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), 0)
-        })
-        return col
-    }
-
-    /**
      * Confirms, then turns off the accessibility service — the one protection
      * banking apps refuse to run alongside — while keeping device admin so the
      * app still can't be uninstalled. The device drops into banking mode
@@ -965,13 +943,6 @@ class MainActivity : Activity() {
             )
             .setCancelable(false)
             .setPositiveButton("Yes, turn off") { _, _ ->
-                // Prevent a second tap.
-                tempAccessBtn?.apply {
-                    isClickable = false
-                    isEnabled = false
-                    alpha = 0.6f
-                    text = "Temporary access on…"
-                }
                 // Remember this was intentional so the enforcement service can
                 // restore protection once it returns.
                 ChildStore.setTempAccess(this, true)
@@ -997,14 +968,113 @@ class MainActivity : Activity() {
     }
 
     /**
-     * The tucked-away options: only uninstalling lives here, so the front screen
-     * stays about status and Temporary Access.
+     * The tucked-away options: Temporary Access (banking) and uninstalling —
+     * neither belongs on the front screen.
      */
     private fun showMoreMenu() {
         if (!ChildStore.isPaired(this)) {
             toast("This device isn’t linked yet.")
             return
         }
+        val dialog = Dialog(this)
+        val sheet = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(20))
+            background = GradientDrawable().apply {
+                setColor(cCard)
+                val r = dp(26).toFloat()
+                cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
+            }
+        }
+        // Drag handle, so the sheet reads as a sheet.
+        sheet.addView(View(this).apply {
+            background = rounded(cMuted, dp(3), Color.TRANSPARENT, 0)
+            alpha = 0.35f
+            layoutParams = LinearLayout.LayoutParams(dp(38), dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(2)
+                bottomMargin = dp(14)
+            }
+        })
+        sheet.addView(
+            sheetRow("\uD83C\uDFE6", "Request Temporary Access",
+                "Turn monitoring off for a banking app") {
+                dialog.dismiss()
+                onTemporaryAccess()
+            }
+        )
+        sheet.addView(
+            sheetRow("\uD83D\uDDD1\uFE0F", "Uninstall this app",
+                "Only after a parent removes this device") {
+                dialog.dismiss()
+                confirmUninstall()
+            }
+        )
+        dialog.setContentView(sheet)
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            setGravity(Gravity.BOTTOM)
+        }
+        dialog.show()
+    }
+
+    /** One tappable line of the bottom sheet. */
+    private fun sheetRow(
+        emoji: String,
+        title: String,
+        subtitle: String,
+        onTap: () -> Unit,
+    ): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            background = ripple(
+                rounded(Color.TRANSPARENT, dp(18), Color.TRANSPARENT, 0),
+                0x22000000,
+            )
+            isClickable = true
+            setOnClickListener { onTap() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+        }
+        row.addView(TextView(this).apply {
+            text = emoji
+            textSize = 19f
+            gravity = Gravity.CENTER
+            val s = dp(44)
+            background = circle(dk("#ECEBFB", "#2A2540"))
+            layoutParams = LinearLayout.LayoutParams(s, s)
+        })
+        row.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+            )
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 15f
+                setTextColor(cInk)
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = subtitle
+                textSize = 12f
+                setTextColor(cMuted)
+                setPadding(0, dp(2), 0, 0)
+            })
+        })
+        return row
+    }
+
+    private fun confirmUninstall() {
         android.app.AlertDialog.Builder(
             this, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
         )
@@ -1160,33 +1230,59 @@ class MainActivity : Activity() {
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(20), dp(20), dp(20), dp(20))
-        background = rounded(cCard, dp(22), Color.TRANSPARENT, 0)
-        elevation = dp(6).toFloat()
+        setPadding(dp(18), dp(18), dp(18), dp(18))
+        background = rounded(cCard, dp(20), Color.TRANSPARENT, 0)
+        elevation = dp(3).toFloat()
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
     }
 
+    /** Material-style touch feedback over any shape. */
+    private fun ripple(content: Drawable, tint: Int = 0x40FFFFFF): Drawable =
+        RippleDrawable(ColorStateList.valueOf(tint), content, null)
+
+    /** A filled, pill-shaped primary button with ripple feedback. */
     private fun filledButton(label: String, onClick: () -> Unit): TextView =
         TextView(this).apply {
             text = label
-            textSize = 16f
+            textSize = 15f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.02f
             gravity = Gravity.CENTER
-            setPadding(dp(16), dp(15), dp(16), dp(15))
-            background = GradientDrawable(
-                GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(cPrimary, cPrimaryDark)
-            ).apply { cornerRadius = dp(14).toFloat() }
+            setPadding(dp(20), dp(15), dp(20), dp(15))
+            background = ripple(
+                GradientDrawable(
+                    GradientDrawable.Orientation.LEFT_RIGHT,
+                    intArrayOf(cPrimary, cPrimaryDark)
+                ).apply { cornerRadius = dp(100).toFloat() }
+            )
+            elevation = dp(2).toFloat()
             isClickable = true
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
+        }
+
+    /** A compact tonal button — quiet next to the filled one. */
+    private fun tonalButton(label: String, onClick: () -> Unit): TextView =
+        TextView(this).apply {
+            text = label
+            textSize = 14f
+            setTextColor(if (isDark) Color.WHITE else cPrimaryDark)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(10), dp(18), dp(10))
+            background = ripple(
+                rounded(dk("#ECEBFB", "#2A2540"), dp(100), Color.TRANSPARENT, 0),
+                0x33000000,
+            )
+            isClickable = true
+            setOnClickListener { onClick() }
         }
 
     private fun rounded(fill: Int, radius: Int, stroke: Int, strokeW: Int): GradientDrawable =
@@ -1215,5 +1311,8 @@ class MainActivity : Activity() {
     private companion object {
         const val REQ_VPN = 0x7A
         const val LOCATION_REQ = 7
+
+        /** The build number shown next to the version name. */
+        const val BUILD_LABEL = "0"
     }
 }

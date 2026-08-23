@@ -78,9 +78,12 @@ class DataClearRepository {
     await Future.wait([
       for (final c in children) _clearChild(c.familyId, c.childId, cutoffMs),
     ]);
+    // Alerts are activity too: the site admin's clear removes the family's
+    // whole feed, not only rows tagged with the included children — alerts of
+    // deleted or unpaired profiles used to survive every wipe.
     await Future.wait([
-      for (final entry in childIdsByFamily.entries)
-        _clearAlerts(entry.key, entry.value, cutoffMs),
+      for (final familyId in childIdsByFamily.keys)
+        _clearAlerts(familyId, null, cutoffMs),
     ]);
   }
 
@@ -126,6 +129,21 @@ class DataClearRepository {
         await Db.instance.collection('devices').doc(device.id).delete();
       } catch (_) {}
     }
+  }
+
+  /// Full activity wipe for one child — history, usage, location, chats and
+  /// their alerts. Used when a profile's last device is removed, so nothing a
+  /// removed device reported lingers anywhere.
+  Future<void> clearChildActivity(String familyId, String childId) async {
+    await _clearChild(familyId, childId, null);
+    await _clearAlerts(familyId, {childId}, null);
+    // The installed-apps report too, so the app-rules list empties with it.
+    try {
+      await Db.child(familyId, childId)
+          .collection('reports')
+          .doc('installedApps')
+          .delete();
+    } catch (_) {}
   }
 
   Future<void> _clearChild(
@@ -207,8 +225,10 @@ class DataClearRepository {
     }
   }
 
+  /// Deletes the family's alerts. With [includedChildIds] null every alert
+  /// goes; otherwise only those children's (plus unattributed ones).
   Future<void> _clearAlerts(
-      String familyId, Set<String> includedChildIds, int? cutoffMs) async {
+      String familyId, Set<String>? includedChildIds, int? cutoffMs) async {
     Query<Map<String, dynamic>> q =
         Db.families.doc(familyId).collection('alerts');
     if (cutoffMs != null) {
@@ -218,6 +238,7 @@ class DataClearRepository {
     final snap = await q.get();
     final refs = snap.docs
         .where((d) {
+          if (includedChildIds == null) return true;
           final cid = (d.data()['childId'] ?? '').toString();
           // Delete alerts for included children (and unattributed ones).
           return cid.isEmpty || includedChildIds.contains(cid);

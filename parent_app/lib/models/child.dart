@@ -43,6 +43,11 @@ class Child {
   /// silent (e.g. uninstalled, powered off, or no network).
   final DateTime? lastSeenAt;
 
+  /// Whether any device is linked to this profile. A profile without a device
+  /// has no protection status at all — neither protected nor needing
+  /// attention. Defaults true so demo children look alive.
+  final bool paired;
+
   /// True while the child has a required protection turned off and the device
   /// is in "banking mode" — every app except the allow-list is suspended.
   final bool lockboxActive;
@@ -78,6 +83,7 @@ class Child {
     this.locationUpdatedAt,
     this.address,
     this.lastSeenAt,
+    this.paired = true,
     this.lockboxActive = false,
     this.lockboxSince,
     this.protections = const {},

@@ -8,6 +8,9 @@ import '../theme/tokens.dart';
 /// that into a snack bar reads like a crash report, and none of it is
 /// actionable. Only the two causes a parent can do something about are named.
 String friendlyError(Object error) {
+  // Deliberate guard messages (e.g. "this family still has 2 profiles") are
+  // already written for the user — pass them through.
+  if (error is StateError) return error.message;
   final text = error.toString();
   if (text.contains('permission-denied')) {
     return 'you don’t have permission to change this.';

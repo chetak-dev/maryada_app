@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
+import '../../data/builtin_keywords.dart';
 import '../../data/site_policy_repository.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feedback.dart';
 
-/// Site-admin editor for the content-blocking keyword lists, grouped by
-/// category. Keywords added here block on every child device (on top of the
-/// built-in lists) — pages whose visible text contains a keyword are blocked.
-class ContentKeywordsScreen extends StatelessWidget {
+/// Site-admin view of every word that blocks a page, grouped by category: the
+/// lists built into the child app plus the words admins added. Add-only by
+/// design — a keyword, once blocking, can't be taken back out.
+class ContentKeywordsScreen extends StatefulWidget {
   const ContentKeywordsScreen({super.key});
 
   static const _categories = <_KwCategory>[
@@ -22,6 +24,20 @@ class ContentKeywordsScreen extends StatelessWidget {
   ];
 
   @override
+  State<ContentKeywordsScreen> createState() => _ContentKeywordsScreenState();
+}
+
+class _ContentKeywordsScreenState extends State<ContentKeywordsScreen> {
+  final _searchCtl = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchCtl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Content keywords')),
@@ -35,10 +51,31 @@ class ContentKeywordsScreen extends StatelessWidget {
             children: [
               const _InfoBanner(),
               const SizedBox(height: AppSpacing.md),
-              for (final c in _categories)
+              TextField(
+                controller: _searchCtl,
+                textInputAction: TextInputAction.search,
+                onChanged: (v) =>
+                    setState(() => _query = v.trim().toLowerCase()),
+                decoration: InputDecoration(
+                  hintText: 'Search every keyword',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () {
+                            _searchCtl.clear();
+                            setState(() => _query = '');
+                          },
+                        ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              for (final c in ContentKeywordsScreen._categories)
                 _CategoryCard(
                   category: c,
                   keywords: byCat[c.id] ?? const [],
+                  query: _query,
                 ),
             ],
           );
@@ -74,9 +111,9 @@ class _InfoBanner extends StatelessWidget {
           SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Text(
-              'These keywords block on every child device, in addition to the '
-              'built-in lists. A page is blocked when its visible text contains '
-              'a keyword.',
+              'A page is blocked on every child device when its visible text '
+              'matches one of these words. Keywords can be added but never '
+              'removed — the lists only ever grow stricter.',
               style: TextStyle(fontSize: 13),
             ),
           ),
@@ -87,9 +124,15 @@ class _InfoBanner extends StatelessWidget {
 }
 
 class _CategoryCard extends StatefulWidget {
-  const _CategoryCard({required this.category, required this.keywords});
+  const _CategoryCard({
+    required this.category,
+    required this.keywords,
+    required this.query,
+  });
+
   final _KwCategory category;
   final List<String> keywords;
+  final String query;
 
   @override
   State<_CategoryCard> createState() => _CategoryCardState();
@@ -105,16 +148,32 @@ class _CategoryCardState extends State<_CategoryCard> {
     super.dispose();
   }
 
+  List<String> _filter(List<String> words) => widget.query.isEmpty
+      ? words
+      : words.where((w) => w.contains(widget.query)).toList();
+
+  /// Everything already blocking in this category, so the same word can't be
+  /// added on top of a built-in one.
+  Set<String> get _existing => {
+        ...widget.keywords,
+        ...?kBuiltinStrongKeywords[widget.category.id],
+        ...?kBuiltinWeakKeywords[widget.category.id],
+      };
+
   Future<void> _add() async {
     final word = _controller.text.trim().toLowerCase();
+    final messenger = ScaffoldMessenger.of(context);
     if (word.length < 3) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('Use at least 3 characters.')),
       );
       return;
     }
-    if (widget.keywords.contains(word)) {
+    if (_existing.contains(word)) {
       _controller.clear();
+      messenger.showSnackBar(
+        SnackBar(content: Text('"$word" already blocks in this category.')),
+      );
       return;
     }
     setState(() => _saving = true);
@@ -122,26 +181,33 @@ class _CategoryCardState extends State<_CategoryCard> {
       await SitePolicyRepository.instance
           .setCategoryKeywords(widget.category.id, [word, ...widget.keywords]);
       _controller.clear();
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Couldn\'t add that keyword: ${friendlyError(e)}')),
+      );
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  Future<void> _remove(String word) {
-    return SitePolicyRepository.instance.setCategoryKeywords(
-      widget.category.id,
-      widget.keywords.where((w) => w != word).toList(),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = widget.category;
+    final strong = _filter(kBuiltinStrongKeywords[c.id] ?? const []);
+    final weak = _filter(kBuiltinWeakKeywords[c.id] ?? const []);
+    final mine = _filter(widget.keywords);
+    final searching = widget.query.isNotEmpty;
+    final hits = strong.length + weak.length + mine.length;
+    if (searching && hits == 0) return const SizedBox.shrink();
+
     return Card(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
+          // Re-keyed on the search so a category holding a match opens itself.
+          key: PageStorageKey('${c.id}|$searching'),
+          initiallyExpanded: searching,
           shape: const Border(),
           collapsedShape: const Border(),
           leading: Container(
@@ -156,9 +222,9 @@ class _CategoryCardState extends State<_CategoryCard> {
           title: Text(c.name,
               style: const TextStyle(fontWeight: FontWeight.w700)),
           subtitle: Text(
-            widget.keywords.isEmpty
-                ? 'No custom keywords'
-                : '${widget.keywords.length} keyword(s)',
+            searching
+                ? '$hits match${hits == 1 ? '' : 'es'}'
+                : '${builtinCount(c.id)} built-in · ${widget.keywords.length} added',
             style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
           ),
           childrenPadding: const EdgeInsets.fromLTRB(
@@ -183,23 +249,75 @@ class _CategoryCardState extends State<_CategoryCard> {
                 ),
               ],
             ),
-            if (widget.keywords.isNotEmpty) ...[
-              const SizedBox(height: AppSpacing.md),
-              Wrap(
-                spacing: AppSpacing.sm,
-                runSpacing: AppSpacing.sm,
-                children: [
-                  for (final w in widget.keywords)
-                    Chip(
-                      label: Text(w),
-                      onDeleted: () => _remove(w),
-                      deleteIcon: const Icon(Icons.close, size: 16),
-                    ),
-                ],
+            if (mine.isNotEmpty)
+              _KeywordGroup(
+                title: 'Added by admins',
+                caption: 'Blocks the page on a single match.',
+                words: mine,
               ),
-            ],
+            if (strong.isNotEmpty)
+              _KeywordGroup(
+                title: 'Built-in · always blocks',
+                caption: 'One match anywhere on the page blocks it.',
+                words: strong,
+              ),
+            if (weak.isNotEmpty)
+              _KeywordGroup(
+                title: 'Built-in · blocks on repeat',
+                caption: 'Everyday words — several different matches on the '
+                    'same page are needed, so ordinary pages stay open.',
+                words: weak,
+              ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _KeywordGroup extends StatelessWidget {
+  const _KeywordGroup({
+    required this.title,
+    required this.caption,
+    required this.words,
+  });
+
+  final String title;
+  final String caption;
+  final List<String> words;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$title · ${words.length}',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.3,
+              color: AppColors.textMuted,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(caption,
+              style:
+                  const TextStyle(fontSize: 11.5, color: AppColors.textMuted)),
+          const SizedBox(height: AppSpacing.sm),
+          // Plain comma-separated text: chips at this volume rendered poorly
+          // and the list is read-only anyway.
+          SelectableText(
+            words.join(', '),
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.6,
+              color: AppColors.textPrimaryOf(context),
+            ),
+          ),
+        ],
       ),
     );
   }

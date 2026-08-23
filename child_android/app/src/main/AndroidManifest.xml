@@ -29,6 +29,7 @@
 
     <application
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
         android:label="Maryada"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
@@ -88,6 +89,17 @@
                 android:value="Parental control screen-time and device enforcement" />
         </service>
 
+        <!-- Owns the "setup isn't finished" notice so it can't be swiped away
+             until every permission is granted. -->
+        <service
+            android:name=".SetupService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Parental control setup completion reminder" />
+        </service>
+
         <receiver
             android:name=".BootReceiver"
             android:exported="true">
@@ -112,6 +124,11 @@
         <!-- Re-posts the Temporary Access notice the moment it is swiped away. -->
         <receiver
             android:name=".TempAccessNotice$DismissReceiver"
+            android:exported="false" />
+
+        <!-- Same, for the "setup isn't finished" notice. -->
+        <receiver
+            android:name=".SetupNotice$DismissReceiver"
             android:exported="false" />
 
         <!-- Opt-in web filter. A local DNS-only VPN that blocks configured

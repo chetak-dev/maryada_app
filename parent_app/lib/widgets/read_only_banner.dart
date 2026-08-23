@@ -2,8 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// A small banner shown on editor screens when the signed-in org admin only has
-/// view access, so they understand why controls are disabled.
+/// A small banner shown on editor screens for accounts whose changes are
+/// turned off, so they understand why controls don't respond. Deliberately
+/// doesn't name the account's access level.
 class ReadOnlyBanner extends StatelessWidget {
   const ReadOnlyBanner({super.key});
 
@@ -24,7 +25,8 @@ class ReadOnlyBanner extends StatelessWidget {
           const SizedBox(width: AppSpacing.sm),
           const Expanded(
             child: Text(
-              'View only — you don’t have edit access, so changes are disabled.',
+              'Changes are managed by your administrator — this screen is for '
+              'viewing.',
               style: TextStyle(fontWeight: FontWeight.w600),
             ),
           ),

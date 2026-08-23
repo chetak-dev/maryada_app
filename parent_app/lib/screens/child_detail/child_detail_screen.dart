@@ -455,7 +455,7 @@ class _ChildSwitcher extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<({Child child, String familyId})>>(
-      stream: FamilyRepository.instance.watchAllChildren(),
+      stream: FamilyRepository.instance.watchMyChildren(),
       builder: (context, snap) {
         final kids = snap.data ?? const <({Child child, String familyId})>[];
         // Nothing to switch between with a single child.
@@ -499,6 +499,9 @@ class _SwitcherChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = child.effectiveStatus;
+    // Unlinked profiles carry no status colour.
+    final dotColor =
+        child.paired ? status.color : AppColors.borderOf(context);
     // A rectangular pill instead of a circular avatar: names were truncating
     // inside the fixed-width circles.
     return InkWell(
@@ -521,7 +524,7 @@ class _SwitcherChip extends StatelessWidget {
               width: 8,
               height: 8,
               decoration: BoxDecoration(
-                color: status.color,
+                color: dotColor,
                 shape: BoxShape.circle,
                 border: selected
                     ? Border.all(color: Colors.white, width: 1)
@@ -569,7 +572,8 @@ class _DeviceList extends StatelessWidget {
       barrierDismissible: false,
       builder: (_) => TypedDangerDialog(
         title: 'Remove this device?',
-        warning: 'Protection and monitoring stop on ${device.label}. The '
+        warning: 'Protection and monitoring stop on ${device.label}, and '
+            'everything it reported — history, chats, usage — is deleted. The '
             'profile and its other devices stay in place.',
         prompt: 'Type the device name to confirm:',
         expected: device.label,

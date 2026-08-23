@@ -22,8 +22,10 @@ extension ChildFilterInfo on ChildFilter {
 
   bool matches(Child c) => switch (this) {
         ChildFilter.all => true,
-        ChildFilter.online => c.effectiveStatus == ChildStatus.online,
-        ChildFilter.offline => c.effectiveStatus == ChildStatus.offline,
+        ChildFilter.online =>
+          c.paired && c.effectiveStatus == ChildStatus.online,
+        ChildFilter.offline =>
+          c.paired && c.effectiveStatus == ChildStatus.offline,
       };
 }
 
@@ -67,7 +69,7 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
   void initState() {
     super.initState();
     if (Db.ready) {
-      _sub = FamilyRepository.instance.watchAllChildren().listen((kids) {
+      _sub = FamilyRepository.instance.watchMyChildren().listen((kids) {
         if (mounted) setState(() => _kids = kids);
       });
     }
@@ -102,25 +104,9 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
   int _countFor(ChildFilter f) =>
       _kids.where((k) => f.matches(k.child)).length;
 
-  bool _atLimit(BuildContext context) {
-    final fid = widget.familyId;
-    final ownCount = _kids.where((k) => k.familyId == fid).length;
-    if (widget.maxChildren > 0 && ownCount >= widget.maxChildren) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(
-          content: Text(
-            'Child limit reached (${widget.maxChildren}). Ask your admin to raise it.',
-          ),
-        ));
-      return true;
-    }
-    return false;
-  }
-
   void _newProfile(BuildContext context) {
     final fid = widget.familyId;
-    if (fid == null || _atLimit(context)) return;
+    if (fid == null) return;
     showNewProfileDialog(context, fid);
   }
 
@@ -230,6 +216,9 @@ class ProfileTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = child.effectiveStatus;
     final online = status == ChildStatus.online;
+    // No device linked yet — the profile has no status to show.
+    final ringColor =
+        child.paired ? status.color : AppColors.borderOf(context);
     final surface = AppColors.surfaceOf(context);
     return Container(
       decoration: BoxDecoration(
@@ -258,7 +247,7 @@ class ProfileTile extends StatelessWidget {
                       padding: const EdgeInsets.all(2),
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(color: status.color, width: 2),
+                        border: Border.all(color: ringColor, width: 2),
                       ),
                       child: CircleAvatar(
                         radius: 22,
@@ -273,27 +262,28 @@ class ProfileTile extends StatelessWidget {
                         ),
                       ),
                     ),
-                    Positioned(
-                      right: 0,
-                      bottom: 0,
-                      child: Container(
-                        width: 15,
-                        height: 15,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: status.color,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: surface, width: 2),
-                        ),
-                        child: Icon(
-                          online
-                              ? Icons.check_rounded
-                              : Icons.close_rounded,
-                          size: 9,
-                          color: Colors.white,
+                    if (child.paired)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          width: 15,
+                          height: 15,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: status.color,
+                            shape: BoxShape.circle,
+                            border: Border.all(color: surface, width: 2),
+                          ),
+                          child: Icon(
+                            online
+                                ? Icons.check_rounded
+                                : Icons.close_rounded,
+                            size: 9,
+                            color: Colors.white,
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 ),
                 const SizedBox(width: AppSpacing.md),
@@ -310,23 +300,33 @@ class ProfileTile extends StatelessWidget {
                             fontWeight: FontWeight.w700, fontSize: 16),
                       ),
                       const SizedBox(height: 5),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 9, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: status.color.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(AppRadius.pill),
-                        ),
-                        child: Text(
-                          status.label,
+                      if (child.paired)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 9, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: status.color.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(AppRadius.pill),
+                          ),
+                          child: Text(
+                            status.label,
+                            style: TextStyle(
+                              color: status.color,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                        )
+                      else
+                        const Text(
+                          'No device linked',
                           style: TextStyle(
-                            color: status.color,
-                            fontSize: 10.5,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.3,
+                            color: AppColors.textMuted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
-                      ),
                     ],
                   ),
                 ),

@@ -2,7 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'db.dart';
 
-/// Categories blocked by default until the site admin customises them.
+/// Categories every child device always blocks. Permanent by design — there is
+/// no way to turn one off, not even for the site admin.
 const Set<String> kDefaultBlockedCategories = {
   'adult',
   'gambling',
@@ -27,14 +28,13 @@ class WebPolicy {
 
   factory WebPolicy.fromMap(Map<String, dynamic>? m) {
     if (m == null) return const WebPolicy();
-    final cats = m['blockedCategories'];
     return WebPolicy(
       safeBrowsingEnabled: m['safeBrowsingEnabled'] != false,
       blockOtherBrowsers: m['blockOtherBrowsers'] == true,
       allowIncognito: m['allowIncognito'] == true,
-      blockedCategories: cats is List
-          ? cats.map((e) => '$e').toSet()
-          : kDefaultBlockedCategories,
+      // Deliberately NOT read from the doc: the categories are permanent, so
+      // an old stored subset can't quietly re-enable anything.
+      blockedCategories: kDefaultBlockedCategories,
     );
   }
 }
@@ -88,14 +88,12 @@ class SitePolicyRepository {
     bool? safeBrowsingEnabled,
     bool? blockOtherBrowsers,
     bool? allowIncognito,
-    Set<String>? blockedCategories,
   }) {
     return _policyDoc.set(
       {
         'safeBrowsingEnabled': ?safeBrowsingEnabled,
         'blockOtherBrowsers': ?blockOtherBrowsers,
         'allowIncognito': ?allowIncognito,
-        'blockedCategories': ?blockedCategories?.toList(),
         'updatedAt': FieldValue.serverTimestamp(),
       },
       SetOptions(merge: true),

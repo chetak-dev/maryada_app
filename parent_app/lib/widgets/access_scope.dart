@@ -10,11 +10,17 @@ class AccessScope extends InheritedWidget {
   /// Whether the current account may add children and change rules.
   final bool canEdit;
 
-  /// Reads the nearest access scope. Defaults to editable when absent (e.g.
-  /// demo mode or the admin console), so unscoped screens keep working.
+  /// What routes outside the scoped subtree get. Screens opened with
+  /// Navigator.push don't inherit from a scope wrapped around `home`, so this
+  /// is set alongside every role change; true covers demo mode and the admin
+  /// console.
+  static bool fallback = true;
+
+  /// Reads the nearest access scope, falling back to [fallback] when absent
+  /// (pushed routes, demo mode, the admin console).
   static bool of(BuildContext context) {
     final scope = context.dependOnInheritedWidgetOfExactType<AccessScope>();
-    return scope?.canEdit ?? true;
+    return scope?.canEdit ?? fallback;
   }
 
   @override

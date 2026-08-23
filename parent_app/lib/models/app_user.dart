@@ -42,6 +42,11 @@ class AppUser {
   final int maxChildren;
   final bool suspended;
   final String? inviteCode;
+
+  /// The family this account belongs to, when the site admin's grant named one.
+  /// Empty for the first parent of a household — they get their own family on
+  /// first sign-in.
+  final String familyId;
   final DateTime? createdAt;
 
   const AppUser({
@@ -53,6 +58,7 @@ class AppUser {
     this.maxChildren = 5,
     this.suspended = false,
     this.inviteCode,
+    this.familyId = '',
     this.createdAt,
   });
 
@@ -80,6 +86,7 @@ class AppUser {
       maxChildren: (m['maxChildren'] as num?)?.toInt() ?? 5,
       suspended: m['suspended'] == true,
       inviteCode: m['inviteCode']?.toString(),
+      familyId: (m['familyId'] ?? '').toString(),
       createdAt: ts is Timestamp ? ts.toDate() : null,
     );
   }
@@ -92,6 +99,7 @@ class AppUser {
         'maxChildren': maxChildren,
         'suspended': suspended,
         if (inviteCode != null) 'inviteCode': inviteCode,
+        'familyId': familyId,
         'createdAt': FieldValue.serverTimestamp(),
       };
 }
