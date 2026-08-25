@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../data/app_update_repository.dart';
 import '../../data/hosts_repository.dart';
 import '../../data/family_repository.dart';
 import '../../data/invites_repository.dart';
@@ -427,15 +428,39 @@ class _AdminToolsPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.lg),
-          Text('Child app', style: theme.textTheme.titleMedium),
+          Text('App updates', style: theme.textTheme.titleMedium),
           const SizedBox(height: AppSpacing.sm),
           Card(
-            child: _tile(
-              context,
-              icon: Icons.system_update_rounded,
-              title: 'Publish app update',
-              subtitle: 'Push a new child app version over the air',
-              screen: const PublishUpdateScreen(),
+            child: Column(
+              children: [
+                _tile(
+                  context,
+                  icon: Icons.system_update_rounded,
+                  title: 'Publish child update',
+                  subtitle: 'Push a new child app version over the air',
+                  screen: const PublishUpdateScreen(),
+                ),
+                const Divider(height: 1, indent: 56),
+                _tile(
+                  context,
+                  icon: Icons.desktop_windows_rounded,
+                  iconColor: const Color(0xFF0078D4),
+                  title: 'Publish PC update',
+                  subtitle: 'Push a new Windows agent build to child PCs',
+                  screen: const PublishUpdateScreen(
+                      target: AppUpdateRepository.windowsDoc),
+                ),
+                const Divider(height: 1, indent: 56),
+                _tile(
+                  context,
+                  icon: Icons.phone_android_rounded,
+                  iconColor: AppColors.info,
+                  title: 'Publish parent update',
+                  subtitle: 'Offer a new Maryada Host build to parents',
+                  screen: const PublishUpdateScreen(
+                      target: AppUpdateRepository.parentDoc),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: AppSpacing.lg),

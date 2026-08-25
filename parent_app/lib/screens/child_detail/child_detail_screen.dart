@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import '../../data/db.dart';
 import '../../data/device_repository.dart';
@@ -20,6 +20,7 @@ import '../location/location_screen.dart';
 import '../pair_device/pair_device_screen.dart';
 import '../sms_history/sms_history_screen.dart';
 import '../youtube_history/youtube_history_screen.dart';
+
 /// Per-child control center: the profile's devices, and the activity and rule
 /// areas that open scoped to the selected device.
 class ChildDetailScreen extends StatefulWidget {
@@ -75,7 +76,11 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xxl),
+          AppSpacing.md,
+          AppSpacing.sm,
+          AppSpacing.md,
+          AppSpacing.xxl,
+        ),
         children: [
           if (Db.ready)
             _ChildSwitcher(currentId: child.id, onSelect: _switchTo),
@@ -93,8 +98,8 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                   TextButton.icon(
                     onPressed: () => Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => PairDeviceScreen(
-                            familyId: familyId!, child: child),
+                        builder: (_) =>
+                            PairDeviceScreen(familyId: familyId!, child: child),
                       ),
                     ),
                     icon: const Icon(Icons.add_rounded, size: 18),
@@ -121,109 +126,168 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
               final h = w / 1.15;
               Widget cell(Widget tile) =>
                   SizedBox(width: w, height: h, child: tile);
-              return Wrap(
-                spacing: AppSpacing.sm,
-                runSpacing: AppSpacing.sm,
-                alignment: WrapAlignment.center,
-                children: [
-              cell(_FeatureTile(
-                icon: Icons.call_rounded,
-                color: AppColors.info,
-                title: 'Call history',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => CallHistoryScreen(
-                        childName: _name,
-                        familyId: familyId,
-                        childId: child.id,
-                        deviceId: _deviceId),
-                  ),
-                ),
-              )),
-              cell(_FeatureTile(
-                icon: Icons.sms_rounded,
-                color: AppColors.success,
-                title: 'Messages',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => SmsHistoryScreen(
-                        childName: _name,
-                        familyId: familyId,
-                        childId: child.id,
-                        deviceId: _deviceId),
-                  ),
-                ),
-              )),
-              cell(_FeatureTile(
-                mark: const WhatsAppMark(size: 44),
-                icon: Icons.forum_rounded,
-                color: WhatsAppMark.brandGreen,
-                title: 'WhatsApp',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ChatHistoryScreen(
-                        childName: _name,
-                        familyId: familyId,
-                        childId: child.id,
-                        deviceId: _deviceId),
-                  ),
-                ),
-              )),
-              cell(_FeatureTile(
-                icon: Icons.smart_display_rounded,
-                color: AppColors.danger,
-                title: 'YouTube',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => YoutubeHistoryScreen(
-                        childName: _name,
-                        familyId: familyId,
-                        childId: child.id,
-                        deviceId: _deviceId),
-                  ),
-                ),
-              )),
-              cell(_FeatureTile(
-                icon: Icons.public_rounded,
-                color: AppColors.info,
-                title: 'Web activity',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ActivityScreen(
-                        childName: child.name,
-                        familyId: familyId,
-                        childId: child.id,
-                        deviceId: _deviceId),
-                  ),
-                ),
-              )),
-              cell(_FeatureTile(
-                icon: Icons.apps_rounded,
-                color: AppColors.accent,
-                title: 'App rules',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => AppRulesScreen(
-                        childName: _name,
-                        familyId: familyId,
-                        childId: child.id),
-                  ),
-                ),
-              )),
-              cell(_FeatureTile(
-                icon: Icons.location_on_rounded,
-                color: AppColors.warning,
-                title: 'Location',
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => LocationScreen(
-                        childName: _name,
-                        familyId: familyId,
-                        childId: child.id),
-                  ),
-                ),
-              )),
-                ],
+              // A PC cannot report calls or SMS, so those tiles would open a
+              // screen that stays empty for good. Devices declare what they can
+              // report and the tiles follow.
+              return StreamBuilder<List<Device>>(
+                stream: _live
+                    ? DeviceRepository.instance.watch(familyId!, child.id)
+                    : null,
+                builder: (context, snap) {
+                  final devices = snap.data ?? const <Device>[];
+                  final effectiveDeviceId =
+                      _deviceId ??
+                      (devices.isNotEmpty ? devices.first.id : null);
+                  // With one device selected the tiles describe that device
+                  // rather than the whole profile.
+                  final scope = effectiveDeviceId == null
+                      ? devices
+                      : devices
+                            .where((d) => d.id == effectiveDeviceId)
+                            .toList();
+                  bool has(String feature) =>
+                      DeviceFeature.supportedBy(scope, feature);
+                  final selectedPlatform =
+                      effectiveDeviceId == null || scope.isEmpty
+                      ? null
+                      : scope.first.platform;
+                  return Wrap(
+                    spacing: AppSpacing.sm,
+                    runSpacing: AppSpacing.sm,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      if (has(DeviceFeature.calls))
+                        cell(
+                          _FeatureTile(
+                            icon: Icons.call_rounded,
+                            color: AppColors.info,
+                            title: 'Call history',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => CallHistoryScreen(
+                                  childName: _name,
+                                  familyId: familyId,
+                                  childId: child.id,
+                                  deviceId: effectiveDeviceId,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (has(DeviceFeature.sms))
+                        cell(
+                          _FeatureTile(
+                            icon: Icons.sms_rounded,
+                            color: AppColors.success,
+                            title: 'Messages',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => SmsHistoryScreen(
+                                  childName: _name,
+                                  familyId: familyId,
+                                  childId: child.id,
+                                  deviceId: effectiveDeviceId,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (has(DeviceFeature.chats))
+                        cell(
+                          _FeatureTile(
+                            mark: const WhatsAppMark(size: 44),
+                            icon: Icons.forum_rounded,
+                            color: WhatsAppMark.brandGreen,
+                            title: 'WhatsApp',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => ChatHistoryScreen(
+                                  childName: _name,
+                                  familyId: familyId,
+                                  childId: child.id,
+                                  deviceId: effectiveDeviceId,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (has(DeviceFeature.youtube))
+                        cell(
+                          _FeatureTile(
+                            icon: Icons.smart_display_rounded,
+                            color: AppColors.danger,
+                            title: 'YouTube',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => YoutubeHistoryScreen(
+                                  childName: _name,
+                                  familyId: familyId,
+                                  childId: child.id,
+                                  deviceId: effectiveDeviceId,
+                                  platform: selectedPlatform,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (has(DeviceFeature.webHistory))
+                        cell(
+                          _FeatureTile(
+                            icon: Icons.public_rounded,
+                            color: AppColors.info,
+                            title: 'Web activity',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => ActivityScreen(
+                                  childName: child.name,
+                                  familyId: familyId,
+                                  childId: child.id,
+                                  deviceId: effectiveDeviceId,
+                                  platform: selectedPlatform,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (has(DeviceFeature.appBlocking))
+                        cell(
+                          _FeatureTile(
+                            icon: Icons.apps_rounded,
+                            color: AppColors.accent,
+                            title: 'App rules',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => AppRulesScreen(
+                                  childName: _name,
+                                  familyId: familyId,
+                                  childId: child.id,
+                                  deviceId: effectiveDeviceId,
+                                  platform: selectedPlatform,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (has(DeviceFeature.location))
+                        cell(
+                          _FeatureTile(
+                            icon: Icons.location_on_rounded,
+                            color: AppColors.warning,
+                            title: 'Location',
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => LocationScreen(
+                                  childName: _name,
+                                  familyId: familyId,
+                                  childId: child.id,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
+                  );
+                },
               );
             },
           ),
@@ -231,13 +295,19 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
           if (canEdit)
             OutlinedButton.icon(
               onPressed: () => _confirmDeleteProfile(context),
-              icon: const Icon(Icons.delete_forever_rounded,
-                  color: AppColors.danger, size: 18),
-              label: const Text('Delete profile',
-                  style: TextStyle(color: AppColors.danger)),
+              icon: const Icon(
+                Icons.delete_forever_rounded,
+                color: AppColors.danger,
+                size: 18,
+              ),
+              label: const Text(
+                'Delete profile',
+                style: TextStyle(color: AppColors.danger),
+              ),
               style: OutlinedButton.styleFrom(
                 side: BorderSide(
-                    color: AppColors.danger.withValues(alpha: 0.4)),
+                  color: AppColors.danger.withValues(alpha: 0.4),
+                ),
                 padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
               ),
             ),
@@ -278,12 +348,17 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
       if (!mounted) return;
       if (!await Net.require(context)) return;
       try {
-        await FamilyRepository.instance
-            .renameChild(_familyId!, _child.id, newName);
+        await FamilyRepository.instance.renameChild(
+          _familyId!,
+          _child.id,
+          newName,
+        );
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Couldn\u2019t rename â€” ${friendlyError(e)}')),
+            SnackBar(
+              content: Text('Couldn\u2019t rename â€” ${friendlyError(e)}'),
+            ),
           );
         }
         return;
@@ -299,8 +374,9 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
     // Devices must be removed one by one first â€” deleting a profile under a
     // live installation would leave it enforcing rules nobody can manage.
     if (_live) {
-      final devices =
-          await DeviceRepository.instance.watch(_familyId!, _child.id).first;
+      final devices = await DeviceRepository.instance
+          .watch(_familyId!, _child.id)
+          .first;
       if (devices.isNotEmpty) {
         if (!context.mounted) return;
         await showDialog<void>(
@@ -330,7 +406,8 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
       barrierDismissible: false,
       builder: (ctx) => TypedDangerDialog(
         title: 'Delete this profile?',
-        warning: 'This removes $_nameâ€™s profile and all saved activity. '
+        warning:
+            'This removes $_nameâ€™s profile and all saved activity. '
             'This cannot be undone.',
         prompt: 'Type the profile name to confirm:',
         expected: _name,
@@ -352,8 +429,10 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
       } catch (e) {
         messenger.showSnackBar(
           SnackBar(
-              content: Text(
-                  'Couldn\u2019t delete the profile â€” ${friendlyError(e)}')),
+            content: Text(
+              'Couldn\u2019t delete the profile â€” ${friendlyError(e)}',
+            ),
+          ),
         );
         return;
       }
@@ -392,8 +471,8 @@ class _DeviceIssueCard extends StatelessWidget {
     final when = ago == null
         ? ''
         : (ago.inMinutes < 60
-            ? '${ago.inMinutes} min ago'
-            : '${ago.inHours} h ago');
+              ? '${ago.inMinutes} min ago'
+              : '${ago.inHours} h ago');
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -404,8 +483,11 @@ class _DeviceIssueCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.report_problem_rounded,
-              color: AppColors.warning, size: 20),
+          const Icon(
+            Icons.report_problem_rounded,
+            color: AppColors.warning,
+            size: 20,
+          ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
             child: Column(
@@ -425,15 +507,15 @@ class _DeviceIssueCard extends StatelessWidget {
                 Text(
                   _plainEnglish(child.lastError ?? ''),
                   style: TextStyle(
-                      color: AppColors.textSecondaryOf(context),
-                      fontSize: 12),
+                    color: AppColors.textSecondaryOf(context),
+                    fontSize: 12,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 const Text(
                   'If protection looks wrong, restart the child device or '
                   're-check its permissions.',
-                  style:
-                      TextStyle(color: AppColors.textMuted, fontSize: 12),
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 12),
                 ),
               ],
             ),
@@ -500,8 +582,7 @@ class _SwitcherChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = child.effectiveStatus;
     // Unlinked profiles carry no status colour.
-    final dotColor =
-        child.paired ? status.color : AppColors.borderOf(context);
+    final dotColor = child.paired ? status.color : AppColors.borderOf(context);
     // A rectangular pill instead of a circular avatar: names were truncating
     // inside the fixed-width circles.
     return InkWell(
@@ -572,7 +653,8 @@ class _DeviceList extends StatelessWidget {
       barrierDismissible: false,
       builder: (_) => TypedDangerDialog(
         title: 'Remove this device?',
-        warning: 'Protection and monitoring stop on ${device.label}, and '
+        warning:
+            'Protection and monitoring stop on ${device.label}, and '
             'everything it reported — history, chats, usage — is deleted. The '
             'profile and its other devices stay in place.',
         prompt: 'Type the device name to confirm:',
@@ -596,8 +678,10 @@ class _DeviceList extends StatelessWidget {
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(
-            content:
-                Text('Couldn\u2019t remove the device â€” ${friendlyError(e)}')),
+          content: Text(
+            'Couldn\u2019t remove the device â€” ${friendlyError(e)}',
+          ),
+        ),
       );
     }
   }
@@ -627,21 +711,28 @@ class _DeviceList extends StatelessWidget {
           ),
         ],
       ),
-    );    focus.dispose();
+    );
+    focus.dispose();
     if (newName == null || newName.isEmpty || newName == device.label) return;
     if (!context.mounted) return;
     if (!await Net.require(context)) return;
     try {
-      await DeviceRepository.instance
-          .rename(familyId, childId, device.id, newName);
+      await DeviceRepository.instance.rename(
+        familyId,
+        childId,
+        device.id,
+        newName,
+      );
       messenger.showSnackBar(
         SnackBar(content: Text('Device renamed to $newName.')),
       );
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(
-            content:
-                Text('Couldn\u2019t rename the device â€” ${friendlyError(e)}')),
+          content: Text(
+            'Couldn\u2019t rename the device â€” ${friendlyError(e)}',
+          ),
+        ),
       );
     }
   }
@@ -660,8 +751,11 @@ class _DeviceList extends StatelessWidget {
               padding: const EdgeInsets.all(AppSpacing.md),
               child: Row(
                 children: [
-                  const Icon(Icons.smartphone_rounded,
-                      color: AppColors.textMuted, size: 20),
+                  const Icon(
+                    Icons.smartphone_rounded,
+                    color: AppColors.textMuted,
+                    size: 20,
+                  ),
                   const SizedBox(width: AppSpacing.sm),
                   Expanded(
                     child: Text(
@@ -669,7 +763,9 @@ class _DeviceList extends StatelessWidget {
                           ? 'Loading devicesâ€¦'
                           : 'This device will appear here after it next checks in.',
                       style: const TextStyle(
-                          color: AppColors.textMuted, fontSize: 13),
+                        color: AppColors.textMuted,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
                 ],
@@ -685,13 +781,13 @@ class _DeviceList extends StatelessWidget {
           });
         }
         Widget tile(Device d) => _DeviceCard(
-              device: d,
-              selected: d.id == selectedId,
-              compact: devices.length > 1,
-              onTap: () => onSelect(d.id),
-              onRename: canEdit ? () => _confirmRename(context, d) : null,
-              onRemove: canEdit ? () => _confirmRemove(context, d) : null,
-            );
+          device: d,
+          selected: d.id == selectedId,
+          compact: devices.length > 1,
+          onTap: () => onSelect(d.id),
+          onRename: canEdit ? () => _confirmRename(context, d) : null,
+          onRemove: canEdit ? () => _confirmRemove(context, d) : null,
+        );
         // One or two devices read better as full cards; beyond that they'd be
         // too narrow, so they become a scrollable strip of chips.
         if (devices.length <= 2) {
@@ -761,14 +857,15 @@ class _DeviceCard extends StatelessWidget {
         onTap: onTap,
         child: Container(
           padding: EdgeInsets.fromLTRB(
-              AppSpacing.sm + 2, AppSpacing.sm + 2, hasMenu ? 0 : AppSpacing.md,
-              AppSpacing.sm + 2),
+            AppSpacing.sm + 2,
+            AppSpacing.sm + 2,
+            hasMenu ? 0 : AppSpacing.md,
+            AppSpacing.sm + 2,
+          ),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(AppRadius.lg),
             border: Border.all(
-              color: selected
-                  ? AppColors.primary
-                  : AppColors.borderOf(context),
+              color: selected ? AppColors.primary : AppColors.borderOf(context),
               width: selected ? 2 : 1,
             ),
           ),
@@ -782,8 +879,11 @@ class _DeviceCard extends StatelessWidget {
                   color: device.platformColor.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(AppRadius.md),
                 ),
-                child: Icon(device.icon,
-                    color: device.platformColor, size: compact ? 20 : 24),
+                child: Icon(
+                  device.icon,
+                  color: device.platformColor,
+                  size: compact ? 20 : 24,
+                ),
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(
@@ -854,13 +954,20 @@ class _DeviceCard extends StatelessWidget {
                   itemBuilder: (_) => [
                     if (onRename != null)
                       const PopupMenuItem(
-                          value: 'rename', child: Text('Rename')),
+                        value: 'rename',
+                        child: Text('Rename'),
+                      ),
                     if (onRemove != null)
                       const PopupMenuItem(
-                          value: 'remove', child: Text('Remove')),
+                        value: 'remove',
+                        child: Text('Remove'),
+                      ),
                   ],
-                  icon: const Icon(Icons.more_vert_rounded,
-                      size: 18, color: AppColors.textMuted),
+                  icon: const Icon(
+                    Icons.more_vert_rounded,
+                    size: 18,
+                    color: AppColors.textMuted,
+                  ),
                 ),
             ],
           ),
@@ -911,8 +1018,9 @@ class _DeviceTile extends StatelessWidget {
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         border: Border.all(
-                          color:
-                              selected ? AppColors.primary : Colors.transparent,
+                          color: selected
+                              ? AppColors.primary
+                              : Colors.transparent,
                           width: 2.5,
                         ),
                       ),
@@ -924,8 +1032,11 @@ class _DeviceTile extends StatelessWidget {
                           color: device.platformColor.withValues(alpha: 0.12),
                           shape: BoxShape.circle,
                         ),
-                        child: Icon(device.icon,
-                            color: device.platformColor, size: 24),
+                        child: Icon(
+                          device.icon,
+                          color: device.platformColor,
+                          size: 24,
+                        ),
                       ),
                     ),
                     Positioned(
@@ -938,8 +1049,9 @@ class _DeviceTile extends StatelessWidget {
                           color: color,
                           shape: BoxShape.circle,
                           border: Border.all(
-                              color: Theme.of(context).scaffoldBackgroundColor,
-                              width: 2),
+                            color: Theme.of(context).scaffoldBackgroundColor,
+                            width: 2,
+                          ),
                         ),
                       ),
                     ),
@@ -976,16 +1088,17 @@ class _DeviceTile extends StatelessWidget {
                 },
                 itemBuilder: (_) => [
                   if (onRename != null)
-                    const PopupMenuItem(
-                        value: 'rename', child: Text('Rename')),
+                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
                   if (onRemove != null)
-                    const PopupMenuItem(
-                        value: 'remove', child: Text('Remove')),
+                    const PopupMenuItem(value: 'remove', child: Text('Remove')),
                 ],
                 child: Container(
                   padding: const EdgeInsets.all(4),
-                  child: const Icon(Icons.more_vert_rounded,
-                      size: 18, color: AppColors.textMuted),
+                  child: const Icon(
+                    Icons.more_vert_rounded,
+                    size: 18,
+                    color: AppColors.textMuted,
+                  ),
                 ),
               ),
             ),
@@ -1043,7 +1156,9 @@ class _FeatureTile extends StatelessWidget {
                 textAlign: TextAlign.center,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                    fontWeight: FontWeight.w600, fontSize: 15),
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
               ),
               const SizedBox(height: AppSpacing.xs),
             ],

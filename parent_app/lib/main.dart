@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'firebase/firebase_bootstrap.dart';
 import 'screens/auth/auth_gate.dart';
+import 'services/app_version.dart';
+import 'services/removal_watch.dart';
 import 'theme/app_theme.dart';
 import 'theme/theme_controller.dart';
 
@@ -9,6 +11,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await FirebaseBootstrap.init();
   await ThemeController.instance.load();
+  await AppVersion.load();
+  if (FirebaseBootstrap.isReady) await RemovalWatch.start();
   runApp(const GuardNestApp());
 }
 

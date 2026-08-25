@@ -55,17 +55,23 @@ class WebHistoryRepository {
   WebHistoryRepository._();
   static final instance = WebHistoryRepository._();
 
-  Stream<WebHistory> watch(String familyId, String childId,
-      {String? deviceId}) {
+  Stream<WebHistory> watch(
+    String familyId,
+    String childId, {
+    String? deviceId,
+    String? platform,
+  }) {
     final reports = Db.childReports(familyId, childId, 'webHistory');
     // `current` is the shared document single-device builds wrote; it belongs
     // to whichever device existed then, so it stays visible until that device
     // migrates it onto its own document.
     final source = deviceId == null
         ? reports.snapshots()
+        : platform == 'windows'
+        ? reports.where(FieldPath.documentId, isEqualTo: deviceId).snapshots()
         : reports
-            .where(FieldPath.documentId, whereIn: [deviceId, 'current'])
-            .snapshots();
+              .where(FieldPath.documentId, whereIn: [deviceId, 'current'])
+              .snapshots();
     return source.map((snap) {
       final visited = <WebVisit>[];
       final blocked = <WebVisit>[];
@@ -76,43 +82,109 @@ class WebHistoryRepository {
         List<WebVisit> parse(String key) {
           return ((data[key] as List?) ?? const [])
               .whereType<Map>()
-              .map((m) => WebVisit(
-                    domain: (m['domain'] ?? '').toString(),
-                    at: Db.millis(m['at']),
-                    timeSpent: m['milliseconds'] is num
-                        ? Duration(
-                            milliseconds: (m['milliseconds'] as num).toInt())
-                        : Duration(
-                            seconds: (m['seconds'] as num?)?.toInt() ?? 0),
-                    count: (m['visits'] as num?)?.toInt() ??
-                        (m['attempts'] as num?)?.toInt() ??
-                        0,
-                    reason: (m['reason'] ?? '').toString(),
-                  ))
+              .map(
+                (m) => WebVisit(
+                  domain: (m['domain'] ?? '').toString(),
+                  at: Db.millis(m['at']),
+                  timeSpent: m['milliseconds'] is num
+                      ? Duration(
+                          milliseconds: (m['milliseconds'] as num).toInt(),
+                        )
+                      : Duration(seconds: (m['seconds'] as num?)?.toInt() ?? 0),
+                  count:
+                      (m['visits'] as num?)?.toInt() ??
+                      (m['attempts'] as num?)?.toInt() ??
+                      0,
+                  reason: (m['reason'] ?? '').toString(),
+                ),
+              )
               .where((v) => v.domain.isNotEmpty)
               .toList();
         }
 
         visited.addAll(parse('visited'));
         blocked.addAll(parse('blocked'));
-        searches.addAll(((data['searches'] as List?) ?? const [])
-            .whereType<Map>()
-            .map((m) => WebSearch(
+        searches.addAll(
+          ((data['searches'] as List?) ?? const [])
+              .whereType<Map>()
+              .map(
+                (m) => WebSearch(
                   query: (m['query'] ?? '').toString(),
                   engine: (m['engine'] ?? 'Search').toString(),
                   at: Db.millis(m['at']),
-                ))
-            .where((s) => s.query.trim().isNotEmpty));
+                ),
+              )
+              .where((s) => s.query.trim().isNotEmpty),
+        );
       }
 
-      searches.sort((a, b) => (b.at?.millisecondsSinceEpoch ?? 0)
-          .compareTo(a.at?.millisecondsSinceEpoch ?? 0));
+      searches.sort(
+        (a, b) => (b.at?.millisecondsSinceEpoch ?? 0).compareTo(
+          a.at?.millisecondsSinceEpoch ?? 0,
+        ),
+      );
       return WebHistory(
-        visited: visited,
-        blocked: blocked,
-        searches: searches,
+        visited: _mergeVisits(visited),
+        blocked: _mergeVisits(blocked),
+        searches: _dedupeSearches(searches),
       );
     });
   }
-}
 
+  List<WebVisit> _mergeVisits(List<WebVisit> source) {
+    final merged = <String, WebVisit>{};
+    for (final visit in source) {
+      final domain = _normaliseDomain(visit.domain);
+      if (domain.isEmpty) continue;
+      final key = '${visit.reason.toLowerCase()}\u0000$domain';
+      final old = merged[key];
+      if (old == null) {
+        merged[key] = WebVisit(
+          domain: domain,
+          at: visit.at,
+          timeSpent: visit.timeSpent,
+          count: visit.count,
+          reason: visit.reason,
+        );
+      } else {
+        final latest =
+            old.at == null || (visit.at != null && visit.at!.isAfter(old.at!))
+            ? visit.at
+            : old.at;
+        merged[key] = WebVisit(
+          domain: domain,
+          at: latest,
+          timeSpent: old.timeSpent + visit.timeSpent,
+          count: old.count + visit.count,
+          reason: visit.reason.isNotEmpty ? visit.reason : old.reason,
+        );
+      }
+    }
+    final result = merged.values.toList()
+      ..sort(
+        (a, b) => (b.at?.millisecondsSinceEpoch ?? 0).compareTo(
+          a.at?.millisecondsSinceEpoch ?? 0,
+        ),
+      );
+    return result;
+  }
+
+  List<WebSearch> _dedupeSearches(List<WebSearch> source) {
+    final seen = <String>{};
+    return source.where((search) {
+      final bucket = (search.at?.millisecondsSinceEpoch ?? 0) ~/ 30000;
+      final key =
+          '${search.engine.trim().toLowerCase()}\u0000'
+          '${search.query.trim().toLowerCase()}\u0000$bucket';
+      return seen.add(key);
+    }).toList();
+  }
+
+  String _normaliseDomain(String raw) {
+    var value = raw.trim().toLowerCase();
+    final uri = Uri.tryParse(value.contains('://') ? value : 'https://$value');
+    if (uri != null && uri.host.isNotEmpty) value = uri.host;
+    value = value.replaceFirst(RegExp(r'^www\.'), '');
+    return value.endsWith('.') ? value.substring(0, value.length - 1) : value;
+  }
+}

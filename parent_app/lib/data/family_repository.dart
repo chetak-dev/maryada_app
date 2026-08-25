@@ -264,9 +264,14 @@ class FamilyRepository {
     final allProtectionsOk = protections.isEmpty
         ? permissionsOk
         : protections.values.every((granted) => granted);
-    final status = paired && setupComplete && allProtectionsOk
-        ? ChildStatus.online
-        : ChildStatus.offline;
+    // Device admin off means the app can be (or already has been) uninstalled
+    // — the one thing that must never hide behind "needs attention".
+    final adminActive = map['adminActive'] != false;
+    final status = !adminActive && paired
+        ? ChildStatus.removed
+        : paired && setupComplete && allProtectionsOk
+            ? ChildStatus.online
+            : ChildStatus.offline;
 
     double? d(dynamic v) => v is num ? v.toDouble() : null;
 

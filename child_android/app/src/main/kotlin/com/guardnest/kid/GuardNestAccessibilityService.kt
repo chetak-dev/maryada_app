@@ -800,6 +800,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
             // dates the top of the window (where the inline separator has already
             // scrolled off), and inline separators date everything below them.
             var currentDay = 0L
+            // How many times each text has already been seen in this pass — the
+            // only trustworthy way to tell a genuinely repeated message from
+            // the same message being read again.
+            val seen = HashMap<String, Int>()
             for (row in rows) {
                 val node = row.node
                 if (node == null) {
@@ -815,9 +819,11 @@ class GuardNestAccessibilityService : AccessibilityService() {
                 // WhatsApp right-aligns the child's own messages; the delivery
                 // ticks only back that up when they're present.
                 val outgoing = bubbleSide(bubble, node, ids.statusId)
+                val occurrence = seen[text] ?: 0
+                seen[text] = occurrence + 1
                 MessageStore.record(
                     appLabel(pkg), chatName, text, outgoing, timeLabel, number,
-                    currentDay,
+                    currentDay, occurrence,
                 )
             }
         } catch (e: Exception) {

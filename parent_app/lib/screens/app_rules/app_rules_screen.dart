@@ -15,11 +15,20 @@ enum _AppFilter { all, blocked, banking }
 /// App rules editor: search installed apps, block them, or set a per-app daily
 /// limit. Persists to Firestore when [familyId] is set and connected.
 class AppRulesScreen extends StatefulWidget {
-  const AppRulesScreen({super.key, this.childName, this.familyId, this.childId});
+  const AppRulesScreen({
+    super.key,
+    this.childName,
+    this.familyId,
+    this.childId,
+    this.deviceId,
+    this.platform,
+  });
 
   final String? childName;
   final String? familyId;
   final String? childId;
+  final String? deviceId;
+  final String? platform;
 
   @override
   State<AppRulesScreen> createState() => _AppRulesScreenState();
@@ -50,11 +59,19 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
   Future<void> _load() async {
     try {
       final reported = widget.childId != null
-          ? await AppRulesRepository.instance
-              .loadInstalledAppsForChild(widget.familyId!, widget.childId!)
-          : await AppRulesRepository.instance.loadInstalledApps(widget.familyId!);
-      final saved = await AppRulesRepository.instance
-          .load(widget.familyId!, childId: widget.childId);
+          ? await AppRulesRepository.instance.loadInstalledAppsForChild(
+              widget.familyId!,
+              widget.childId!,
+              deviceId: widget.deviceId,
+              platform: widget.platform,
+            )
+          : await AppRulesRepository.instance.loadInstalledApps(
+              widget.familyId!,
+            );
+      final saved = await AppRulesRepository.instance.load(
+        widget.familyId!,
+        childId: widget.childId,
+      );
       // On a child's screen the family-wide rules apply too — the device
       // blocks when either does, so show the same merged picture.
       final family = widget.childId == null
@@ -63,8 +80,10 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
       if (!mounted) return;
       setState(() {
         _apps = reported
-            .map((a) =>
-                AppRule.installed(a.packageName, a.appName, owners: a.owners))
+            .map(
+              (a) =>
+                  AppRule.installed(a.packageName, a.appName, owners: a.owners),
+            )
             .toList();
         for (final app in _apps) {
           final r = saved[app.packageName];
@@ -139,25 +158,37 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
           if (!_canEdit)
             const Padding(
               padding: EdgeInsets.fromLTRB(
-                  AppSpacing.md, AppSpacing.sm, AppSpacing.md, 0),
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                0,
+              ),
               child: ReadOnlyBanner(),
             ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(AppSpacing.md, AppSpacing.md,
-                AppSpacing.md, AppSpacing.sm),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.sm,
+            ),
             child: _RulesSummary(
               total: _apps.length,
               blocked: blocked,
               banking: banking,
               filter: _filter,
               // Tapping the active stat clears it, so "all" needs no chip.
-              onFilter: (f) => setState(
-                  () => _filter = _filter == f ? _AppFilter.all : f),
+              onFilter: (f) =>
+                  setState(() => _filter = _filter == f ? _AppFilter.all : f),
             ),
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md, 0, AppSpacing.md, AppSpacing.sm),
+              AppSpacing.md,
+              0,
+              AppSpacing.md,
+              AppSpacing.sm,
+            ),
             child: TextField(
               onChanged: (v) => setState(() => _query = v),
               decoration: const InputDecoration(
@@ -171,42 +202,45 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _apps.isEmpty
-                    ? const EmptyState(
-                        icon: Icons.apps_rounded,
-                        title: 'No apps yet',
-                        message:
-                            'Apps appear here once the child device syncs.',
-                      )
-                    : list.isEmpty
-                        ? const EmptyState(
-                            icon: Icons.search_off_rounded,
-                            title: 'No apps in this view',
-                          )
-                        : ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(AppSpacing.md,
-                                0, AppSpacing.md, AppSpacing.xxl),
-                            itemCount: list.length,
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: AppSpacing.sm),
-                            itemBuilder: (_, i) => _AppTile(
-                              app: list[i],
-                              canEdit: _canEdit,
-                              onBlockChanged: (v) {
-                                if (!_canEdit) return;
-                                final app = list[i];
-                                final was = app.blocked;
-                                setState(() => app.blocked = v);
-                                _persist(app, () => app.blocked = was);
-                              },
-                              onBankingChanged: (v) {
-                                if (!_canEdit) return;
-                                final app = list[i];
-                                final was = app.bankingAllowed;
-                                setState(() => app.bankingAllowed = v);
-                                _persist(app, () => app.bankingAllowed = was);
-                              },
-                            ),
-                          ),
+                ? const EmptyState(
+                    icon: Icons.apps_rounded,
+                    title: 'No apps yet',
+                    message: 'Apps appear here once the child device syncs.',
+                  )
+                : list.isEmpty
+                ? const EmptyState(
+                    icon: Icons.search_off_rounded,
+                    title: 'No apps in this view',
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.md,
+                      0,
+                      AppSpacing.md,
+                      AppSpacing.xxl,
+                    ),
+                    itemCount: list.length,
+                    separatorBuilder: (_, _) =>
+                        const SizedBox(height: AppSpacing.sm),
+                    itemBuilder: (_, i) => _AppTile(
+                      app: list[i],
+                      canEdit: _canEdit,
+                      onBlockChanged: (v) {
+                        if (!_canEdit) return;
+                        final app = list[i];
+                        final was = app.blocked;
+                        setState(() => app.blocked = v);
+                        _persist(app, () => app.blocked = was);
+                      },
+                      onBankingChanged: (v) {
+                        if (!_canEdit) return;
+                        final app = list[i];
+                        final was = app.bankingAllowed;
+                        setState(() => app.bankingAllowed = v);
+                        _persist(app, () => app.bankingAllowed = was);
+                      },
+                    ),
+                  ),
           ),
         ],
       ),
@@ -384,7 +418,11 @@ class _AppTile extends StatelessWidget {
         ),
       ),
       padding: const EdgeInsets.fromLTRB(
-          AppSpacing.md, AppSpacing.sm, AppSpacing.sm, AppSpacing.sm),
+        AppSpacing.md,
+        AppSpacing.sm,
+        AppSpacing.sm,
+        AppSpacing.sm,
+      ),
       child: Row(
         children: [
           Container(
@@ -432,19 +470,23 @@ class _AppTile extends StatelessWidget {
                         const _Tag(label: 'Blocked', color: AppColors.danger),
                       if (app.effectivelyBanking)
                         const _Tag(
-                            label: 'Temp access',
-                            color: AppColors.success,
-                            icon: Icons.account_balance_rounded),
+                          label: 'Temp access',
+                          color: AppColors.success,
+                          icon: Icons.account_balance_rounded,
+                        ),
                       if (lockBlock || lockBanking)
                         const _Tag(
-                            label: 'All children',
-                            color: AppColors.info,
-                            icon: Icons.groups_2_rounded),
+                          label: 'All children',
+                          color: AppColors.info,
+                          icon: Icons.groups_2_rounded,
+                        ),
                       if (owners != null)
                         Text(
                           owners,
                           style: const TextStyle(
-                              color: AppColors.textMuted, fontSize: 12),
+                            color: AppColors.textMuted,
+                            fontSize: 12,
+                          ),
                         ),
                     ],
                   ),
@@ -460,8 +502,11 @@ class _AppTile extends StatelessWidget {
             tooltip: 'More',
             enabled: canEdit && !lockBanking,
             position: PopupMenuPosition.under,
-            icon: const Icon(Icons.more_vert_rounded,
-                size: 20, color: AppColors.textMuted),
+            icon: const Icon(
+              Icons.more_vert_rounded,
+              size: 20,
+              color: AppColors.textMuted,
+            ),
             onSelected: (v) {
               if (v == 'banking') onBankingChanged(!app.bankingAllowed);
             },

@@ -28,38 +28,79 @@ class UsageSummary {
   bool get isEmpty => week.isEmpty && topApps.isEmpty;
 }
 
-/// Reads the screen-time usage a child device reports to
-/// `families/{familyId}/children/{childId}/usage/summary`.
+/// Reads the screen-time usage a child's devices report to
+/// `families/{familyId}/children/{childId}/usage/{deviceUid}`.
 class UsageRepository {
   UsageRepository._();
   static final instance = UsageRepository._();
 
-  Future<UsageSummary?> load(String familyId, String childId) async {
-    final doc = await Db.families
+  /// Loads usage for a profile, or for one device when [deviceId] is set.
+  ///
+  /// Every device writes its own document, so a phone and a PC are added
+  /// together rather than overwriting each other. `summary` is the shared
+  /// document single-device builds wrote; it still counts, unless the device
+  /// that owns it has also written its own document and would be counted twice.
+  Future<UsageSummary?> load(
+    String familyId,
+    String childId, {
+    String? deviceId,
+  }) async {
+    final snap = await Db.families
         .doc(familyId)
         .collection('children')
         .doc(childId)
         .collection('usage')
-        .doc('summary')
         .get();
-    final data = doc.data();
-    if (data == null) return null;
+    if (snap.docs.isEmpty) return null;
 
-    final week = ((data['week'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((m) => DayUsage(
-              (m['day'] ?? '').toString(),
-              (m['minutes'] as num?)?.toInt() ?? 0,
-            ))
-        .toList();
-    final topApps = ((data['topApps'] as List?) ?? const [])
-        .whereType<Map>()
-        .map((m) => AppUsage(
-              (m['appName'] ?? m['packageName'] ?? '').toString(),
-              (m['minutes'] as num?)?.toInt() ?? 0,
-            ))
-        .toList();
+    final perDevice = snap.docs.where((d) => d.id != 'summary').toList();
+    final ownedIds = perDevice.map((d) => d.id).toSet();
+    final sources = deviceId != null
+        ? snap.docs.where((d) => d.id == deviceId).toList()
+        : [
+            ...perDevice,
+            ...snap.docs.where((d) =>
+                d.id == 'summary' &&
+                !ownedIds.contains((d.data()['deviceUid'] ?? '').toString())),
+          ];
+    if (sources.isEmpty) return null;
 
-    return UsageSummary(week: week, topApps: topApps);
+    final minutesByDay = <String, int>{};
+    final order = <String>[];
+    final minutesByApp = <String, int>{};
+    DateTime? updatedAt;
+
+    for (final doc in sources) {
+      final data = doc.data();
+      for (final entry in ((data['week'] as List?) ?? const []).whereType<Map>()) {
+        final day = (entry['day'] ?? '').toString();
+        if (day.isEmpty) continue;
+        if (!minutesByDay.containsKey(day)) order.add(day);
+        minutesByDay[day] =
+            (minutesByDay[day] ?? 0) + ((entry['minutes'] as num?)?.toInt() ?? 0);
+      }
+      for (final entry
+          in ((data['topApps'] as List?) ?? const []).whereType<Map>()) {
+        final name = (entry['appName'] ?? entry['packageName'] ?? '').toString();
+        if (name.isEmpty) continue;
+        minutesByApp[name] =
+            (minutesByApp[name] ?? 0) + ((entry['minutes'] as num?)?.toInt() ?? 0);
+      }
+      final at = Db.millis(data['updatedAt']);
+      if (at != null && (updatedAt == null || at.isAfter(updatedAt))) {
+        updatedAt = at;
+      }
+    }
+
+    final topApps = minutesByApp.entries
+        .map((e) => AppUsage(e.key, e.value))
+        .toList()
+      ..sort((a, b) => b.minutes.compareTo(a.minutes));
+
+    return UsageSummary(
+      week: [for (final day in order) DayUsage(day, minutesByDay[day] ?? 0)],
+      topApps: topApps.take(6).toList(),
+      updatedAt: updatedAt,
+    );
   }
 }

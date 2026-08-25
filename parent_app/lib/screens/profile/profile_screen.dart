@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
-import '../../config.dart';
 import '../../data/user_repository.dart';
 import '../../models/app_user.dart';
+import '../../services/app_version.dart';
 import '../../services/auth_service.dart';
+import '../../services/parent_update.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/dialog_buttons.dart';
 
@@ -104,18 +105,34 @@ class ProfileScreen extends StatelessWidget {
         Text('Account', style: theme.textTheme.titleMedium),
         const SizedBox(height: AppSpacing.sm),
         Card(
-          child: ListTile(
-            contentPadding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.md, vertical: AppSpacing.xs),
-            leading: const Icon(Icons.logout_rounded, color: AppColors.danger),
-            title: const Text('Sign out',
-                style: TextStyle(fontWeight: FontWeight.w700)),
-            onTap: () => _signOut(context),
+          child: Column(
+            children: [
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+                leading: const Icon(Icons.system_update_rounded,
+                    color: AppColors.primary),
+                title: const Text('Check for updates',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text('Installed ${AppVersion.label}'),
+                onTap: () => ParentUpdate.checkNow(context),
+              ),
+              const Divider(height: 1, indent: 56),
+              ListTile(
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+                leading:
+                    const Icon(Icons.logout_rounded, color: AppColors.danger),
+                title: const Text('Sign out',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                onTap: () => _signOut(context),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: AppSpacing.xl),
         Center(
-          child: Text('Maryada · $kAppVersionLabel',
+          child: Text('Maryada · ${AppVersion.label}',
               style:
                   theme.textTheme.bodySmall?.copyWith(color: AppColors.textMuted)),
         ),

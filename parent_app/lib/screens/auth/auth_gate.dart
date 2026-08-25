@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../data/user_repository.dart';
 import '../../models/app_user.dart';
 import '../../services/auth_service.dart';
+import '../../services/parent_update.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/access_scope.dart';
 import '../../widgets/brand_mark.dart';
@@ -54,6 +55,16 @@ class _RoleRouter extends StatefulWidget {
 class _RoleRouterState extends State<_RoleRouter> {
   late final Future<AppUser> _resolve =
       UserRepository.instance.resolve(widget.uid, widget.email);
+
+  @override
+  void initState() {
+    super.initState();
+    // Signed in — this is the one moment we know a screen is about to appear,
+    // so it's where the app asks whether a newer build has been published.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ParentUpdate.promptIfAvailable(context);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -39,10 +39,15 @@ class YoutubeHistoryRepository {
   YoutubeHistoryRepository._();
   static final instance = YoutubeHistoryRepository._();
 
-  Stream<List<YoutubeVideo>> watch(String familyId, String childId,
-      {String? deviceId}) {
+  Stream<List<YoutubeVideo>> watch(
+    String familyId,
+    String childId, {
+    String? deviceId,
+    String? platform,
+  }) {
     return Db.watchReportArray<YoutubeVideo>(
       deviceId: deviceId,
+      includeLegacyCurrent: platform != 'windows',
       familyId: familyId,
       childId: childId,
       collection: 'youtubeHistory',
@@ -79,7 +84,8 @@ class YoutubeHistoryRepository {
       if (prev == null) {
         byKey[k] = v;
       } else {
-        final newer = (v.at?.millisecondsSinceEpoch ?? 0) >
+        final newer =
+            (v.at?.millisecondsSinceEpoch ?? 0) >
                 (prev.at?.millisecondsSinceEpoch ?? 0)
             ? v
             : prev;
@@ -88,14 +94,18 @@ class YoutubeHistoryRepository {
           channel: newer.channel.isNotEmpty ? newer.channel : prev.channel,
           at: newer.at,
           watchedSeconds: prev.watchedSeconds + v.watchedSeconds,
-          durationSeconds:
-              newer.durationSeconds > 0 ? newer.durationSeconds : prev.durationSeconds,
+          durationSeconds: newer.durationSeconds > 0
+              ? newer.durationSeconds
+              : prev.durationSeconds,
         );
       }
     }
     final list = byKey.values.toList()
-      ..sort((a, b) => (b.at?.millisecondsSinceEpoch ?? 0)
-          .compareTo(a.at?.millisecondsSinceEpoch ?? 0));
+      ..sort(
+        (a, b) => (b.at?.millisecondsSinceEpoch ?? 0).compareTo(
+          a.at?.millisecondsSinceEpoch ?? 0,
+        ),
+      );
     return list;
   }
 }

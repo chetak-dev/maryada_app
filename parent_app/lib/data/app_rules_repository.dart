@@ -35,19 +35,23 @@ class AppRulesRepository {
   AppRulesRepository._();
   static final instance = AppRulesRepository._();
 
-  CollectionReference<Map<String, dynamic>> _col(String familyId,
-          [String? childId]) =>
-      (childId == null || childId.isEmpty)
-          ? Db.families.doc(familyId).collection('appRules')
-          : Db.families
-              .doc(familyId)
-              .collection('children')
-              .doc(childId)
-              .collection('appRules');
+  CollectionReference<Map<String, dynamic>> _col(
+    String familyId, [
+    String? childId,
+  ]) => (childId == null || childId.isEmpty)
+      ? Db.families.doc(familyId).collection('appRules')
+      : Db.families
+            .doc(familyId)
+            .collection('children')
+            .doc(childId)
+            .collection('appRules');
 
   /// One-shot load of saved rules, keyed by package name. When [childId] is set,
   /// loads that child's own rules; otherwise the family-wide ("common") rules.
-  Future<Map<String, AppRuleData>> load(String familyId, {String? childId}) async {
+  Future<Map<String, AppRuleData>> load(
+    String familyId, {
+    String? childId,
+  }) async {
     final snap = await _col(familyId, childId).get();
     return {
       for (final d in snap.docs)
@@ -101,15 +105,20 @@ class AppRulesRepository {
         (owners[pkg] ??= <String>[]).add(label);
       }
     }
-    final list = names.entries
-        .map((e) => InstalledAppInfo(
-              packageName: e.key,
-              appName: e.value,
-              owners: owners[e.key] ?? const [],
-            ))
-        .toList()
-      ..sort((a, b) =>
-          a.appName.toLowerCase().compareTo(b.appName.toLowerCase()));
+    final list =
+        names.entries
+            .map(
+              (e) => InstalledAppInfo(
+                packageName: e.key,
+                appName: e.value,
+                owners: owners[e.key] ?? const [],
+              ),
+            )
+            .toList()
+          ..sort(
+            (a, b) =>
+                a.appName.toLowerCase().compareTo(b.appName.toLowerCase()),
+          );
     return list;
   }
 
@@ -117,22 +126,43 @@ class AppRulesRepository {
   /// the profile has no linked device — stale reports don't show.
   Future<List<InstalledAppInfo>> loadInstalledAppsForChild(
     String familyId,
-    String childId,
-  ) async {
+    String childId, {
+    String? deviceId,
+    String? platform,
+  }) async {
     final ref = Db.families.doc(familyId).collection('children').doc(childId);
     final childDoc = await ref.get();
     if (childDoc.data()?['paired'] != true) return const [];
     final byPackage = <String, String>{};
-    _mergeReport(await _childApps(ref), byPackage);
+    _mergeReport(
+      await _childApps(ref, deviceId: deviceId, platform: platform),
+      byPackage,
+    );
     return _sorted(byPackage);
   }
 
+  /// Every device reports its own installed-apps document. A phone and a PC on
+  /// one profile hold different apps, so they are merged rather than the last
+  /// writer winning; `installedApps` is the shared document single-device
+  /// builds wrote.
   Future<List<dynamic>> _childApps(
-    DocumentReference<Map<String, dynamic>> childRef,
-  ) async {
-    final report =
-        await childRef.collection('reports').doc('installedApps').get();
-    return (report.data()?['apps'] as List?) ?? const [];
+    DocumentReference<Map<String, dynamic>> childRef, {
+    String? deviceId,
+    String? platform,
+  }) async {
+    final reports = await childRef.collection('reports').get();
+    final apps = <dynamic>[];
+    for (final doc in reports.docs) {
+      if (!acceptsInstalledAppsReport(
+        doc.id,
+        deviceId: deviceId,
+        platform: platform,
+      )) {
+        continue;
+      }
+      apps.addAll((doc.data()['apps'] as List?) ?? const []);
+    }
+    return apps;
   }
 
   void _mergeReport(List<dynamic> apps, Map<String, String> into) {
@@ -148,11 +178,28 @@ class AppRulesRepository {
   }
 
   List<InstalledAppInfo> _sorted(Map<String, String> byPackage) {
-    final list = byPackage.entries
-        .map((e) => InstalledAppInfo(packageName: e.key, appName: e.value))
-        .toList()
-      ..sort((a, b) =>
-          a.appName.toLowerCase().compareTo(b.appName.toLowerCase()));
+    final list =
+        byPackage.entries
+            .map((e) => InstalledAppInfo(packageName: e.key, appName: e.value))
+            .toList()
+          ..sort(
+            (a, b) =>
+                a.appName.toLowerCase().compareTo(b.appName.toLowerCase()),
+          );
     return list;
   }
+}
+
+/// Whether one report document belongs in the current app-rules view.
+bool acceptsInstalledAppsReport(
+  String reportId, {
+  String? deviceId,
+  String? platform,
+}) {
+  if (!reportId.startsWith('installedApps')) return false;
+  if (deviceId == null) return true;
+  if (reportId == 'installedApps-$deviceId') return true;
+  // Current Android builds still write one shared legacy report. Windows has
+  // a per-device report and must never inherit this document.
+  return platform == 'android' && reportId == 'installedApps';
 }

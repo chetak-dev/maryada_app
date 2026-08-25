@@ -806,6 +806,7 @@ class _AvatarChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = child.effectiveStatus;
     final online = status == ChildStatus.online;
+    final removed = status == ChildStatus.removed;
     // No device yet — no status: plain grey ring, no badge.
     final ringColor =
         child.paired ? status.color : AppColors.borderOf(context);
@@ -823,12 +824,17 @@ class _AvatarChip extends StatelessWidget {
         width: 84,
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          // Top-aligned with a fixed name area: centring made a chip whose
+          // name wrapped to two lines sit higher than the rest, so the row of
+          // circles no longer lined up.
+          mainAxisAlignment: MainAxisAlignment.start,
           children: [
             Stack(
               clipBehavior: Clip.none,
               children: [
                 // The ring is the status: green for protected, amber otherwise.
+                // A removed app fills the whole avatar red instead — it must
+                // not read as just another shade of "needs attention".
                 Container(
                   padding: const EdgeInsets.all(2),
                   decoration: BoxDecoration(
@@ -837,15 +843,19 @@ class _AvatarChip extends StatelessWidget {
                   ),
                   child: CircleAvatar(
                     radius: 21,
-                    backgroundColor: child.avatarColor,
-                    child: Text(
-                      child.initials,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 17,
-                      ),
-                    ),
+                    backgroundColor:
+                        removed ? AppColors.danger : child.avatarColor,
+                    child: removed
+                        ? const Icon(Icons.gpp_bad_rounded,
+                            color: Colors.white, size: 22)
+                        : Text(
+                            child.initials,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 17,
+                            ),
+                          ),
                   ),
                 ),
                 if (child.paired)
@@ -874,13 +884,16 @@ class _AvatarChip extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 5),
-            Text(
-              child.name,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                  fontSize: 11.5, fontWeight: FontWeight.w600, height: 1.15),
+            SizedBox(
+              height: 28,
+              child: Text(
+                child.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 11.5, fontWeight: FontWeight.w600, height: 1.15),
+              ),
             ),
           ],
         ),

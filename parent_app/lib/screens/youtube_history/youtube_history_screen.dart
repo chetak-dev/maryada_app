@@ -18,6 +18,7 @@ class YoutubeHistoryScreen extends StatelessWidget {
     this.familyId,
     this.childId,
     this.deviceId,
+    this.platform,
   });
 
   final String childName;
@@ -26,6 +27,7 @@ class YoutubeHistoryScreen extends StatelessWidget {
 
   /// When set, only this device's records are shown.
   final String? deviceId;
+  final String? platform;
 
   bool get _live => familyId != null && childId != null && Db.ready;
 
@@ -43,6 +45,7 @@ class YoutubeHistoryScreen extends StatelessWidget {
               familyId: familyId!,
               childId: childId!,
               deviceId: deviceId,
+              platform: platform,
             ),
     );
   }
@@ -83,10 +86,10 @@ enum _Sort { recent, watched }
 
 extension on _Filter {
   bool accepts(_Kind kind) => switch (this) {
-        _Filter.all => true,
-        _Filter.videos => kind == _Kind.video,
-        _Filter.searches => kind == _Kind.search,
-      };
+    _Filter.all => true,
+    _Filter.videos => kind == _Kind.video,
+    _Filter.searches => kind == _Kind.search,
+  };
 }
 
 String _clock(DateTime? t) {
@@ -105,8 +108,8 @@ String _watchedLabel(int watched, int duration) {
   final base = h > 0
       ? '${h}h ${m}m watched'
       : m > 0
-          ? '${m}m ${s}s watched'
-          : '${s}s watched';
+      ? '${m}m ${s}s watched'
+      : '${s}s watched';
   if (duration <= 0) return base;
   return '$base of ${_clockDuration(duration)}';
 }
@@ -128,10 +131,12 @@ class _YoutubeActivityView extends StatefulWidget {
     required this.familyId,
     required this.childId,
     this.deviceId,
+    this.platform,
   });
   final String familyId;
   final String childId;
   final String? deviceId;
+  final String? platform;
 
   @override
   State<_YoutubeActivityView> createState() => _YoutubeActivityViewState();
@@ -144,17 +149,30 @@ class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
 
   // Built once: re-creating them inside build() re-subscribes on every
   // setState, which flashes the loading spinner each time a filter is tapped.
-  late final Stream<List<YoutubeVideo>> _videosStream =
-      YoutubeHistoryRepository.instance.watch(widget.familyId, widget.childId,
-          deviceId: widget.deviceId);
+  late final Stream<List<YoutubeVideo>> _videosStream = YoutubeHistoryRepository
+      .instance
+      .watch(
+        widget.familyId,
+        widget.childId,
+        deviceId: widget.deviceId,
+        platform: widget.platform,
+      );
   late final Stream<WebHistory> _webStream = WebHistoryRepository.instance
-      .watch(widget.familyId, widget.childId, deviceId: widget.deviceId);
+      .watch(
+        widget.familyId,
+        widget.childId,
+        deviceId: widget.deviceId,
+        platform: widget.platform,
+      );
 
   bool _inPeriod(DateTime? at) {
     if (at == null) return false;
     final now = DateTime.now();
-    final start = DateTime(now.year, now.month, now.day)
-        .subtract(Duration(days: _days - 1));
+    final start = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: _days - 1));
     return !at.isBefore(start);
   }
 
@@ -187,36 +205,45 @@ class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
               .where((s) => _inPeriod(s.at))
               .toList();
 
-          final total = videos.fold(Duration.zero,
-              (sum, v) => sum + Duration(seconds: v.watchedSeconds));
+          final total = videos.fold(
+            Duration.zero,
+            (sum, v) => sum + Duration(seconds: v.watchedSeconds),
+          );
 
-          final entries = <_Entry>[
-            for (final v in videos)
-              _Entry(
-                kind: _Kind.video,
-                title: v.title,
-                subtitle: _videoSubtitle(v),
-                meta: _watchedLabel(v.watchedSeconds, v.durationSeconds),
-                watchedSeconds: v.watchedSeconds,
-                at: v.at,
-                openUrl: v.searchUrl,
-              ),
-            for (final s in searches)
-              _Entry(
-                kind: _Kind.search,
-                title: s.query,
-                subtitle: 'Searched on YouTube',
-                at: s.at,
-              ),
-          ]..sort((a, b) => (b.at?.millisecondsSinceEpoch ?? 0)
-              .compareTo(a.at?.millisecondsSinceEpoch ?? 0));
+          final entries =
+              <_Entry>[
+                for (final v in videos)
+                  _Entry(
+                    kind: _Kind.video,
+                    title: v.title,
+                    subtitle: _videoSubtitle(v),
+                    meta: _watchedLabel(v.watchedSeconds, v.durationSeconds),
+                    watchedSeconds: v.watchedSeconds,
+                    at: v.at,
+                    openUrl: v.searchUrl,
+                  ),
+                for (final s in searches)
+                  _Entry(
+                    kind: _Kind.search,
+                    title: s.query,
+                    subtitle: 'Searched on YouTube',
+                    at: s.at,
+                  ),
+              ]..sort(
+                (a, b) => (b.at?.millisecondsSinceEpoch ?? 0).compareTo(
+                  a.at?.millisecondsSinceEpoch ?? 0,
+                ),
+              );
 
-          final shown =
-              entries.where((e) => _filter.accepts(e.kind)).toList();
+          final shown = entries.where((e) => _filter.accepts(e.kind)).toList();
 
           return ListView(
             padding: const EdgeInsets.fromLTRB(
-                AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.md,
+              AppSpacing.xxl,
+            ),
             children: [
               _SummaryCard(
                 total: total,
@@ -228,8 +255,8 @@ class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
                 searches: searches.length,
                 filter: _filter,
                 // Tapping the active stat clears it, so "all" needs no chip.
-                onFilter: (f) => setState(
-                    () => _filter = _filter == f ? _Filter.all : f),
+                onFilter: (f) =>
+                    setState(() => _filter = _filter == f ? _Filter.all : f),
               ),
               const SizedBox(height: AppSpacing.lg),
               if (shown.isEmpty)
@@ -256,10 +283,11 @@ class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
   /// Longest watched first, as one list — day headers make no sense here.
   /// Searches carry no watch time, so they drop out of this view.
   List<Widget> _buildMostWatched(List<_Entry> entries) {
-    final videos = entries
-        .where((e) => e.kind == _Kind.video && e.watchedSeconds > 0)
-        .toList()
-      ..sort((a, b) => b.watchedSeconds.compareTo(a.watchedSeconds));
+    final videos =
+        entries
+            .where((e) => e.kind == _Kind.video && e.watchedSeconds > 0)
+            .toList()
+          ..sort((a, b) => b.watchedSeconds.compareTo(a.watchedSeconds));
     if (videos.isEmpty) {
       return const [
         Padding(
@@ -324,10 +352,10 @@ class _SummaryCard extends StatelessWidget {
   final ValueChanged<_Filter> onFilter;
 
   static String _periodLabel(int d) => switch (d) {
-        1 => 'Today',
-        7 => 'Last 7 days',
-        _ => 'Last 30 days',
-      };
+    1 => 'Today',
+    7 => 'Last 7 days',
+    _ => 'Last 30 days',
+  };
 
   String get _headline {
     if (total.inSeconds < 1) return '—';
@@ -375,7 +403,9 @@ class _SummaryCard extends StatelessWidget {
                 itemBuilder: (_) => const [
                   PopupMenuItem(value: _Sort.recent, child: Text('Recent')),
                   PopupMenuItem(
-                      value: _Sort.watched, child: Text('Most watched')),
+                    value: _Sort.watched,
+                    child: Text('Most watched'),
+                  ),
                 ],
                 child: _CardPill(
                   label: sort == _Sort.watched ? 'Most watched' : 'Recent',
@@ -539,20 +569,32 @@ class _CardPill extends StatelessWidget {
   }
 }
 
-class _DayHeader extends StatelessWidget {  const _DayHeader({required this.day, required this.count});
+class _DayHeader extends StatelessWidget {
+  const _DayHeader({required this.day, required this.count});
   final DateTime day;
   final int count;
 
   String get _label {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final diff =
-        today.difference(DateTime(day.year, day.month, day.day)).inDays;
+    final diff = today
+        .difference(DateTime(day.year, day.month, day.day))
+        .inDays;
     if (diff == 0) return 'Today';
     if (diff == 1) return 'Yesterday';
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${day.day} ${months[day.month - 1]}';
   }
@@ -574,7 +616,8 @@ class _DayHeader extends StatelessWidget {  const _DayHeader({required this.day,
           ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
-              child: Container(height: 1, color: AppColors.borderOf(context))),
+            child: Container(height: 1, color: AppColors.borderOf(context)),
+          ),
           const SizedBox(width: AppSpacing.sm),
           Text(
             '$count',
@@ -607,12 +650,12 @@ class _DayCard extends StatelessWidget {
           for (var i = 0; i < entries.length; i++) ...[
             if (i > 0)
               Padding(
-                padding:
-                    const EdgeInsets.only(left: 68, right: AppSpacing.md),
+                padding: const EdgeInsets.only(left: 68, right: AppSpacing.md),
                 child: Divider(
-                    height: 1,
-                    thickness: 1,
-                    color: AppColors.borderOf(context)),
+                  height: 1,
+                  thickness: 1,
+                  color: AppColors.borderOf(context),
+                ),
               ),
             _Row(entry: entries[i]),
           ],
@@ -640,9 +683,9 @@ class _Row extends StatelessWidget {
       ok = false;
     }
     if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open YouTube')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Could not open YouTube')));
     }
   }
 
@@ -661,7 +704,9 @@ class _Row extends StatelessWidget {
     );
     return Padding(
       padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: 14),
+        horizontal: AppSpacing.md,
+        vertical: 14,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -699,8 +744,11 @@ class _Row extends StatelessWidget {
                   const SizedBox(height: 3),
                   Row(
                     children: [
-                      const Icon(Icons.schedule_rounded,
-                          size: 12, color: AppColors.primary),
+                      const Icon(
+                        Icons.schedule_rounded,
+                        size: 12,
+                        color: AppColors.primary,
+                      ),
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(

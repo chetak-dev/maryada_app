@@ -17,9 +17,3 @@ const int kDefaultMaxChildren = 5;
 /// Everyone else who signs in becomes a blocked `user` until granted. Kept
 /// false so access is pre-authorised by the site admin.
 const bool kOpenHostSignup = false;
-
-/// Shown wherever the app names its own version. Keep the numbers in step with
-/// `version:` in pubspec.yaml (name, then build).
-const String kAppVersionName = '1.0.0';
-const String kAppBuild = '0';
-const String kAppVersionLabel = 'v$kAppVersionName($kAppBuild)';

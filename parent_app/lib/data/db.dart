@@ -23,8 +23,7 @@ class Db {
   static DocumentReference<Map<String, dynamic>> child(
     String familyId,
     String childId,
-  ) =>
-      children(familyId).doc(childId);
+  ) => children(familyId).doc(childId);
 
   /// The child device reports each activity feed as one document per device
   /// holding an array (web, call, SMS and YouTube history all share this
@@ -34,8 +33,7 @@ class Db {
     String familyId,
     String childId,
     String collection,
-  ) =>
-      child(familyId, childId).collection(collection);
+  ) => child(familyId, childId).collection(collection);
 
   /// Watches those report documents and maps the array under [field] through
   /// [parse]. Entries that [parse] returns null for are dropped, so a single
@@ -48,6 +46,7 @@ class Db {
     required String field,
     required T? Function(Map<dynamic, dynamic> entry) parse,
     String? deviceId,
+    bool includeLegacyCurrent = true,
   }) {
     final reports = childReports(familyId, childId, collection);
     // `current` is the shared document single-device builds wrote; it belongs
@@ -55,23 +54,26 @@ class Db {
     // migrates it onto its own document.
     final source = deviceId == null
         ? reports.snapshots()
-        : reports
-            .where(FieldPath.documentId, whereIn: [deviceId, 'current'])
-            .snapshots();
+        : includeLegacyCurrent
+        ? reports
+              .where(FieldPath.documentId, whereIn: [deviceId, 'current'])
+              .snapshots()
+        : reports.where(FieldPath.documentId, isEqualTo: deviceId).snapshots();
     return source.map((snap) {
       final out = <T>[];
       for (final doc in snap.docs) {
-        out.addAll(((doc.data()[field] as List?) ?? const [])
-            .whereType<Map>()
-            .map(parse)
-            .whereType<T>());
+        out.addAll(
+          ((doc.data()[field] as List?) ?? const [])
+              .whereType<Map>()
+              .map(parse)
+              .whereType<T>(),
+        );
       }
       return out;
     });
   }
 
   /// Reads epoch-millis timestamps as written by the child device.
-  static DateTime? millis(Object? value) => value is num
-      ? DateTime.fromMillisecondsSinceEpoch(value.toInt())
-      : null;
+  static DateTime? millis(Object? value) =>
+      value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
 }

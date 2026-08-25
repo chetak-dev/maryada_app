@@ -24,7 +24,20 @@ class Device {
   /// The version exactly as the child's own screen shows it, e.g. "v1.0.0(0)".
   /// Empty on devices running a build from before it was reported.
   final String appVersionLabel;
+
+  /// False once the child device reported that its device admin was turned
+  /// off. Deactivating the admin is required before the app can be
+  /// uninstalled, so this is the clearest warning of a removal in progress.
+  final bool adminActive;
+
+  /// When that happened, so the parent knows how long it has been off.
+  final DateTime? adminChangedAt;
   final Map<String, bool> protections;
+
+  /// What this platform can actually report. Empty on Android and on anything
+  /// installed before devices declared it, which is read as "everything" —
+  /// hiding a feed those devices do fill would lose real data.
+  final Map<String, bool> capabilities;
 
   const Device({
     required this.id,
@@ -37,8 +50,14 @@ class Device {
     this.appVersionCode = 0,
     this.appVersionName,
     this.appVersionLabel = '',
+    this.adminActive = true,
+    this.adminChangedAt,
     this.protections = const {},
+    this.capabilities = const {},
   });
+
+  /// True unless this device says otherwise.
+  bool supports(String feature) => capabilities[feature] ?? true;
 
   /// What the parent sees first: their own name for it, else the model.
   String get label => displayName.isNotEmpty ? displayName : deviceModel;
@@ -52,6 +71,22 @@ class Device {
   }
 
   bool get isOnline => online && !isStale;
+
+  /// Long enough without a heartbeat that the app is no longer running at all
+  /// — uninstalled, force-stopped or the phone is off. The device reports
+  /// every couple of minutes, so an hour of silence is well past normal doze.
+  bool get isSilent {
+    final at = lastSeenAt;
+    if (at == null) return true;
+    return DateTime.now().difference(at) > const Duration(hours: 1);
+  }
+
+  /// The app can be removed: its device admin was switched off.
+  bool get removalUnlocked => !adminActive;
+
+  /// Silent *and* unprotected — as close to "it's gone" as the phone can tell
+  /// us, since an uninstalled app cannot report its own removal.
+  bool get likelyRemoved => removalUnlocked && isSilent;
 
   List<String> get offProtections =>
       protections.entries.where((e) => !e.value).map((e) => e.key).toList();
@@ -79,14 +114,34 @@ class Device {
         _ => const Color(0xFF3DDC84),
       };
 
-  Color get statusColor =>
-      allProtectionsOk ? AppColors.success : AppColors.warning;
+  Color get statusColor {
+    if (removalUnlocked || isSilent) return AppColors.danger;
+    return allProtectionsOk ? AppColors.success : AppColors.warning;
+  }
 
   /// Permissions decide this, not the heartbeat: a device whose background
   /// service was killed is still protected, and saying "Offline" whenever the
   /// child had the app closed told the parent nothing they could act on.
-  String get statusLabel =>
-      allProtectionsOk ? 'Protected' : 'Permission missing';
+  /// Removal and prolonged silence are the exceptions — both are things the
+  /// parent must act on, and both used to hide behind the permission state.
+  String get statusLabel {
+    if (likelyRemoved) return 'App removed${_removedOn()}';
+    if (removalUnlocked) return 'Protection turned off${_removedOn()}';
+    if (isSilent) return 'Not reporting';
+    return allProtectionsOk ? 'Protected' : 'Permission missing';
+  }
+
+  /// " · 12 Aug" — the day protection was switched off, when it is known.
+  String _removedOn() {
+    final at = adminChangedAt;
+    if (at == null) return '';
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final d = at.toLocal();
+    return ' · ${d.day} ${months[d.month - 1]}';
+  }
 
   /// What to print next to the status. Falls back to the raw version name for
   /// devices that predate the reported label.
@@ -98,6 +153,7 @@ class Device {
 
   static Device fromDoc(String id, Map<String, dynamic> m) {
     final rawProt = m['protections'];
+    final rawCaps = m['capabilities'];
     return Device(
       id: id,
       deviceModel: (m['deviceModel'] ?? 'Device').toString(),
@@ -109,10 +165,35 @@ class Device {
       appVersionCode: (m['appVersionCode'] as num?)?.toInt() ?? 0,
       appVersionName: m['appVersionName'] as String?,
       appVersionLabel: (m['appVersionLabel'] ?? '').toString(),
+      // Absent on devices that predate the marker; assume intact rather than
+      // crying wolf on every existing install.
+      adminActive: m['adminActive'] != false,
+      adminChangedAt: (m['adminChangedAt'] as Timestamp?)?.toDate(),
       protections: {
         if (rawProt is Map)
           for (final e in rawProt.entries) e.key.toString(): e.value == true,
       },
+      capabilities: {
+        if (rawCaps is Map)
+          for (final e in rawCaps.entries) e.key.toString(): e.value == true,
+      },
     );
   }
+}
+
+/// The feature keys a device may declare, matching what the agents report.
+class DeviceFeature {
+  static const calls = 'calls';
+  static const sms = 'sms';
+  static const chats = 'chats';
+  static const youtube = 'youtube';
+  static const webHistory = 'webHistory';
+  static const appBlocking = 'appBlocking';
+  static const location = 'location';
+
+  /// True when any of a profile's devices can report [feature]. A profile with
+  /// no devices supports everything, so an unpaired child still shows the full
+  /// set rather than an empty screen.
+  static bool supportedBy(Iterable<Device> devices, String feature) =>
+      devices.isEmpty || devices.any((d) => d.supports(feature));
 }

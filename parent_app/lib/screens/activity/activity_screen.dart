@@ -13,6 +13,7 @@ class ActivityScreen extends StatefulWidget {
     this.familyId,
     this.childId,
     this.deviceId,
+    this.platform,
   });
 
   final String? childName;
@@ -21,6 +22,7 @@ class ActivityScreen extends StatefulWidget {
 
   /// When set, only this device's records are shown.
   final String? deviceId;
+  final String? platform;
 
   @override
   State<ActivityScreen> createState() => _ActivityScreenState();
@@ -47,7 +49,9 @@ class _ActivityScreenState extends State<ActivityScreen> {
           : _WebActivityView(
               familyId: widget.familyId!,
               childId: widget.childId!,
-              deviceId: widget.deviceId),
+              deviceId: widget.deviceId,
+              platform: widget.platform,
+            ),
     );
   }
 }
@@ -78,11 +82,11 @@ enum _Filter { all, searches, sites, blocked }
 
 extension on _Filter {
   bool accepts(_Kind kind) => switch (this) {
-        _Filter.all => true,
-        _Filter.searches => kind == _Kind.search,
-        _Filter.sites => kind == _Kind.site,
-        _Filter.blocked => kind == _Kind.blocked,
-      };
+    _Filter.all => true,
+    _Filter.searches => kind == _Kind.search,
+    _Filter.sites => kind == _Kind.site,
+    _Filter.blocked => kind == _Kind.blocked,
+  };
 }
 
 String _clock(DateTime? t) {
@@ -122,10 +126,12 @@ class _WebActivityView extends StatefulWidget {
     required this.familyId,
     required this.childId,
     this.deviceId,
+    this.platform,
   });
   final String familyId;
   final String childId;
   final String? deviceId;
+  final String? platform;
 
   @override
   State<_WebActivityView> createState() => _WebActivityViewState();
@@ -137,14 +143,21 @@ class _WebActivityViewState extends State<_WebActivityView> {
 
   // Built once: re-creating it inside build() re-subscribes on every setState,
   // which flashes the loading spinner each time a filter is tapped.
-  late final Stream<WebHistory> _stream = WebHistoryRepository.instance
-      .watch(widget.familyId, widget.childId, deviceId: widget.deviceId);
+  late final Stream<WebHistory> _stream = WebHistoryRepository.instance.watch(
+    widget.familyId,
+    widget.childId,
+    deviceId: widget.deviceId,
+    platform: widget.platform,
+  );
 
   bool _inPeriod(DateTime? at) {
     if (at == null) return false;
     final now = DateTime.now();
-    final start = DateTime(now.year, now.month, now.day)
-        .subtract(Duration(days: _days - 1));
+    final start = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: _days - 1));
     return !at.isBefore(start);
   }
 
@@ -176,37 +189,40 @@ class _WebActivityViewState extends State<_WebActivityView> {
     _searchCount = searches.length;
     _siteCount = visited.length;
     _blockCount = blocked.fold<int>(0, (sum, b) => sum + b.count);
-    _totalTime =
-        visited.fold(Duration.zero, (sum, v) => sum + v.timeSpent);
+    _totalTime = visited.fold(Duration.zero, (sum, v) => sum + v.timeSpent);
 
-    _allEntries = <_Entry>[
-      for (final s in searches)
-        _Entry(
-          kind: _Kind.search,
-          title: s.query,
-          subtitle: s.engine,
-          at: s.at,
-        ),
-      for (final v in visited)
-        _Entry(
-          kind: _Kind.site,
-          title: v.domain,
-          subtitle: [
-            if (v.timeSpent.inMilliseconds > 0) _short(v.timeSpent),
-            if (v.count > 1) '${v.count} visits',
-          ].join('  ·  '),
-          at: v.at,
-        ),
-      for (final b in blocked)
-        _Entry(
-          kind: _Kind.blocked,
-          title: b.domain,
-          subtitle: b.count == 1 ? 'Blocked' : 'Blocked ${b.count} times',
-          at: b.at,
-          tag: _reasonLabels[b.reason] ?? 'Others',
-        ),
-    ]..sort((a, b) => (b.at?.millisecondsSinceEpoch ?? 0)
-        .compareTo(a.at?.millisecondsSinceEpoch ?? 0));
+    _allEntries =
+        <_Entry>[
+          for (final s in searches)
+            _Entry(
+              kind: _Kind.search,
+              title: s.query,
+              subtitle: s.engine,
+              at: s.at,
+            ),
+          for (final v in visited)
+            _Entry(
+              kind: _Kind.site,
+              title: v.domain,
+              subtitle: [
+                if (v.timeSpent.inMilliseconds > 0) _short(v.timeSpent),
+                if (v.count > 1) '${v.count} visits',
+              ].join('  ·  '),
+              at: v.at,
+            ),
+          for (final b in blocked)
+            _Entry(
+              kind: _Kind.blocked,
+              title: b.domain,
+              subtitle: b.count == 1 ? 'Blocked' : 'Blocked ${b.count} times',
+              at: b.at,
+              tag: _reasonLabels[b.reason] ?? 'Others',
+            ),
+        ]..sort(
+          (a, b) => (b.at?.millisecondsSinceEpoch ?? 0).compareTo(
+            a.at?.millisecondsSinceEpoch ?? 0,
+          ),
+        );
   }
 
   @override
@@ -226,12 +242,17 @@ class _WebActivityViewState extends State<_WebActivityView> {
         }
 
         _rebuild(snap.data ?? const WebHistory());
-        final entries =
-            _allEntries.where((e) => _filter.accepts(e.kind)).toList();
+        final entries = _allEntries
+            .where((e) => _filter.accepts(e.kind))
+            .toList();
 
         return ListView(
           padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
+            AppSpacing.md,
+            AppSpacing.md,
+            AppSpacing.md,
+            AppSpacing.xxl,
+          ),
           children: [
             _SummaryCard(
               total: _totalTime,
@@ -242,8 +263,8 @@ class _WebActivityViewState extends State<_WebActivityView> {
               blocked: _blockCount,
               filter: _filter,
               // Tapping the active stat clears it, so "all" needs no chip.
-              onFilter: (f) => setState(
-                  () => _filter = _filter == f ? _Filter.all : f),
+              onFilter: (f) =>
+                  setState(() => _filter = _filter == f ? _Filter.all : f),
             ),
             const SizedBox(height: AppSpacing.lg),
             if (entries.isEmpty)
@@ -310,10 +331,10 @@ class _SummaryCard extends StatelessWidget {
   final ValueChanged<_Filter> onFilter;
 
   static String _periodLabel(int d) => switch (d) {
-        1 => 'Today',
-        7 => 'Last 7 days',
-        _ => 'Last 30 days',
-      };
+    1 => 'Today',
+    7 => 'Last 7 days',
+    _ => 'Last 30 days',
+  };
 
   String get _headline {
     if (total.inSeconds < 1) return '—';
@@ -359,7 +380,9 @@ class _SummaryCard extends StatelessWidget {
                 ],
                 child: Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.sm + 2, vertical: 6),
+                    horizontal: AppSpacing.sm + 2,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(AppRadius.pill),
@@ -376,8 +399,11 @@ class _SummaryCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 2),
-                      const Icon(Icons.expand_more_rounded,
-                          size: 16, color: Colors.white),
+                      const Icon(
+                        Icons.expand_more_rounded,
+                        size: 16,
+                        color: Colors.white,
+                      ),
                     ],
                   ),
                 ),
@@ -502,12 +528,24 @@ class _DayHeader extends StatelessWidget {
   String get _label {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final diff = today.difference(DateTime(day.year, day.month, day.day)).inDays;
+    final diff = today
+        .difference(DateTime(day.year, day.month, day.day))
+        .inDays;
     if (diff == 0) return 'Today';
     if (diff == 1) return 'Yesterday';
     const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     return '${day.day} ${months[day.month - 1]}';
   }
@@ -529,7 +567,8 @@ class _DayHeader extends StatelessWidget {
           ),
           const SizedBox(width: AppSpacing.sm),
           Expanded(
-              child: Container(height: 1, color: AppColors.borderOf(context))),
+            child: Container(height: 1, color: AppColors.borderOf(context)),
+          ),
           const SizedBox(width: AppSpacing.sm),
           Text(
             '$count',
@@ -562,12 +601,12 @@ class _DayCard extends StatelessWidget {
           for (var i = 0; i < entries.length; i++) ...[
             if (i > 0)
               Padding(
-                padding:
-                    const EdgeInsets.only(left: 68, right: AppSpacing.md),
+                padding: const EdgeInsets.only(left: 68, right: AppSpacing.md),
                 child: Divider(
-                    height: 1,
-                    thickness: 1,
-                    color: AppColors.borderOf(context)),
+                  height: 1,
+                  thickness: 1,
+                  color: AppColors.borderOf(context),
+                ),
               ),
             _Row(entry: entries[i]),
           ],
@@ -586,7 +625,9 @@ class _Row extends StatelessWidget {
     final blocked = entry.kind == _Kind.blocked;
     return Padding(
       padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md, vertical: 14),
+        horizontal: AppSpacing.md,
+        vertical: 14,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
@@ -622,8 +663,9 @@ class _Row extends StatelessWidget {
                               ? AppColors.danger
                               : AppColors.textSecondaryOf(context),
                           fontSize: 12.5,
-                          fontWeight:
-                              blocked ? FontWeight.w600 : FontWeight.w400,
+                          fontWeight: blocked
+                              ? FontWeight.w600
+                              : FontWeight.w400,
                         ),
                       ),
                     ],
@@ -678,7 +720,8 @@ class _Tag extends StatelessWidget {
 
 /// Sites get a lettered tile keyed to the domain, so a parent recognises a
 /// repeat visit at a glance instead of scanning identical globe icons.
-class _Badge extends StatelessWidget {  const _Badge({required this.entry});
+class _Badge extends StatelessWidget {
+  const _Badge({required this.entry});
   final _Entry entry;
 
   @override
@@ -692,14 +735,16 @@ class _Badge extends StatelessWidget {  const _Badge({required this.entry});
           color: AppColors.info.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(AppRadius.md),
         ),
-        child: const Icon(Icons.search_rounded,
-            color: AppColors.info, size: 20),
+        child: const Icon(
+          Icons.search_rounded,
+          color: AppColors.info,
+          size: 20,
+        ),
       );
     }
 
     final domain = entry.title.replaceFirst(RegExp(r'^www\.'), '');
-    final letter =
-        domain.isEmpty ? '?' : domain.substring(0, 1).toUpperCase();
+    final letter = domain.isEmpty ? '?' : domain.substring(0, 1).toUpperCase();
     final tint = AppColors.avatarFor(domain);
     final isBlocked = entry.kind == _Kind.blocked;
 
@@ -714,8 +759,9 @@ class _Badge extends StatelessWidget {  const _Badge({required this.entry});
             height: 40,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: (isBlocked ? AppColors.textMuted : tint)
-                  .withValues(alpha: 0.14),
+              color: (isBlocked ? AppColors.textMuted : tint).withValues(
+                alpha: 0.14,
+              ),
               borderRadius: BorderRadius.circular(AppRadius.md),
             ),
             child: Text(
@@ -739,10 +785,15 @@ class _Badge extends StatelessWidget {  const _Badge({required this.entry});
                   color: AppColors.danger,
                   shape: BoxShape.circle,
                   border: Border.all(
-                      color: AppColors.surfaceOf(context), width: 2),
+                    color: AppColors.surfaceOf(context),
+                    width: 2,
+                  ),
                 ),
-                child: const Icon(Icons.close_rounded,
-                    size: 10, color: Colors.white),
+                child: const Icon(
+                  Icons.close_rounded,
+                  size: 10,
+                  color: Colors.white,
+                ),
               ),
             ),
         ],
@@ -750,4 +801,3 @@ class _Badge extends StatelessWidget {  const _Badge({required this.entry});
     );
   }
 }
-

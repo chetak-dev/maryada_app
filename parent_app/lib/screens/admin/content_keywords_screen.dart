@@ -72,7 +72,7 @@ class _ContentKeywordsScreenState extends State<ContentKeywordsScreen> {
               ),
               const SizedBox(height: AppSpacing.md),
               for (final c in ContentKeywordsScreen._categories)
-                _CategoryCard(
+                _CategoryTile(
                   category: c,
                   keywords: byCat[c.id] ?? const [],
                   query: _query,
@@ -123,8 +123,11 @@ class _InfoBanner extends StatelessWidget {
   }
 }
 
-class _CategoryCard extends StatefulWidget {
-  const _CategoryCard({
+/// One category row. Opens its own page — an expanding tile kept collapsing
+/// itself every time the Firestore stream pushed a new snapshot, so the words
+/// were never on screen long enough to read.
+class _CategoryTile extends StatelessWidget {
+  const _CategoryTile({
     required this.category,
     required this.keywords,
     required this.query,
@@ -134,11 +137,64 @@ class _CategoryCard extends StatefulWidget {
   final List<String> keywords;
   final String query;
 
+  List<String> _filter(List<String> words) => query.isEmpty
+      ? words
+      : words.where((w) => w.contains(query)).toList();
+
   @override
-  State<_CategoryCard> createState() => _CategoryCardState();
+  Widget build(BuildContext context) {
+    final c = category;
+    final hits = _filter(kBuiltinStrongKeywords[c.id] ?? const []).length +
+        _filter(kBuiltinWeakKeywords[c.id] ?? const []).length +
+        _filter(keywords).length;
+    if (query.isNotEmpty && hits == 0) return const SizedBox.shrink();
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md, vertical: AppSpacing.xs),
+        leading: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: c.color.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(AppRadius.md),
+          ),
+          child: Icon(c.icon, color: c.color, size: 22),
+        ),
+        title:
+            Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text(
+          query.isNotEmpty
+              ? '$hits match${hits == 1 ? '' : 'es'}'
+              : '${builtinCount(c.id)} built-in · ${keywords.length} added',
+          style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+        ),
+        trailing:
+            const Icon(Icons.chevron_right_rounded, color: AppColors.textMuted),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => _CategoryPage(category: c, query: query),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
-class _CategoryCardState extends State<_CategoryCard> {
+/// Every word that blocks in one category, plus the box to add another.
+class _CategoryPage extends StatefulWidget {
+  const _CategoryPage({required this.category, required this.query});
+
+  final _KwCategory category;
+  final String query;
+
+  @override
+  State<_CategoryPage> createState() => _CategoryPageState();
+}
+
+class _CategoryPageState extends State<_CategoryPage> {
   final _controller = TextEditingController();
   bool _saving = false;
 
@@ -152,15 +208,14 @@ class _CategoryCardState extends State<_CategoryCard> {
       ? words
       : words.where((w) => w.contains(widget.query)).toList();
 
-  /// Everything already blocking in this category, so the same word can't be
-  /// added on top of a built-in one.
-  Set<String> get _existing => {
-        ...widget.keywords,
+  /// Everything already blocking here, so the same word can't be added twice.
+  Set<String> _existing(List<String> mine) => {
+        ...mine,
         ...?kBuiltinStrongKeywords[widget.category.id],
         ...?kBuiltinWeakKeywords[widget.category.id],
       };
 
-  Future<void> _add() async {
+  Future<void> _add(List<String> mine) async {
     final word = _controller.text.trim().toLowerCase();
     final messenger = ScaffoldMessenger.of(context);
     if (word.length < 3) {
@@ -169,7 +224,7 @@ class _CategoryCardState extends State<_CategoryCard> {
       );
       return;
     }
-    if (_existing.contains(word)) {
+    if (_existing(mine).contains(word)) {
       _controller.clear();
       messenger.showSnackBar(
         SnackBar(content: Text('"$word" already blocks in this category.')),
@@ -179,11 +234,12 @@ class _CategoryCardState extends State<_CategoryCard> {
     setState(() => _saving = true);
     try {
       await SitePolicyRepository.instance
-          .setCategoryKeywords(widget.category.id, [word, ...widget.keywords]);
+          .setCategoryKeywords(widget.category.id, [word, ...mine]);
       _controller.clear();
     } catch (e) {
       messenger.showSnackBar(
-        SnackBar(content: Text('Couldn\'t add that keyword: ${friendlyError(e)}')),
+        SnackBar(
+            content: Text('Couldn\'t add that keyword: ${friendlyError(e)}')),
       );
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -195,81 +251,57 @@ class _CategoryCardState extends State<_CategoryCard> {
     final c = widget.category;
     final strong = _filter(kBuiltinStrongKeywords[c.id] ?? const []);
     final weak = _filter(kBuiltinWeakKeywords[c.id] ?? const []);
-    final mine = _filter(widget.keywords);
-    final searching = widget.query.isNotEmpty;
-    final hits = strong.length + weak.length + mine.length;
-    if (searching && hits == 0) return const SizedBox.shrink();
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: AppSpacing.sm),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          // Re-keyed on the search so a category holding a match opens itself.
-          key: PageStorageKey('${c.id}|$searching'),
-          initiallyExpanded: searching,
-          shape: const Border(),
-          collapsedShape: const Border(),
-          leading: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: c.color.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(AppRadius.md),
-            ),
-            child: Icon(c.icon, color: c.color, size: 22),
-          ),
-          title: Text(c.name,
-              style: const TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: Text(
-            searching
-                ? '$hits match${hits == 1 ? '' : 'es'}'
-                : '${builtinCount(c.id)} built-in · ${widget.keywords.length} added',
-            style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
-          ),
-          childrenPadding: const EdgeInsets.fromLTRB(
-              AppSpacing.md, 0, AppSpacing.md, AppSpacing.md),
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    onSubmitted: (_) => _add(),
-                    decoration: InputDecoration(
-                      hintText: 'Add a keyword to ${c.name.toLowerCase()}',
-                      prefixIcon: const Icon(Icons.text_fields_rounded),
+    return Scaffold(
+      appBar: AppBar(title: Text(c.name)),
+      body: StreamBuilder<Map<String, List<String>>>(
+        stream: SitePolicyRepository.instance.watchCategoryKeywords(),
+        builder: (context, snap) {
+          final mine = _filter((snap.data ?? const {})[c.id] ?? const []);
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _controller,
+                      onSubmitted: (_) => _add(mine),
+                      decoration: InputDecoration(
+                        hintText: 'Add a keyword',
+                        prefixIcon: const Icon(Icons.text_fields_rounded),
+                      ),
                     ),
                   ),
+                  const SizedBox(width: AppSpacing.sm),
+                  IconButton.filled(
+                    onPressed: _saving ? null : () => _add(mine),
+                    icon: const Icon(Icons.add),
+                  ),
+                ],
+              ),
+              if (mine.isNotEmpty)
+                _KeywordGroup(
+                  title: 'Added by admins',
+                  caption: 'Blocks the page on a single match.',
+                  words: mine,
                 ),
-                const SizedBox(width: AppSpacing.sm),
-                IconButton.filled(
-                  onPressed: _saving ? null : _add,
-                  icon: const Icon(Icons.add),
+              if (strong.isNotEmpty)
+                _KeywordGroup(
+                  title: 'Built-in · always blocks',
+                  caption: 'One match anywhere on the page blocks it.',
+                  words: strong,
                 ),
-              ],
-            ),
-            if (mine.isNotEmpty)
-              _KeywordGroup(
-                title: 'Added by admins',
-                caption: 'Blocks the page on a single match.',
-                words: mine,
-              ),
-            if (strong.isNotEmpty)
-              _KeywordGroup(
-                title: 'Built-in · always blocks',
-                caption: 'One match anywhere on the page blocks it.',
-                words: strong,
-              ),
-            if (weak.isNotEmpty)
-              _KeywordGroup(
-                title: 'Built-in · blocks on repeat',
-                caption: 'Everyday words — several different matches on the '
-                    'same page are needed, so ordinary pages stay open.',
-                words: weak,
-              ),
-          ],
-        ),
+              if (weak.isNotEmpty)
+                _KeywordGroup(
+                  title: 'Built-in · blocks on repeat',
+                  caption: 'Everyday words — several different matches on the '
+                      'same page are needed, so ordinary pages stay open.',
+                  words: weak,
+                ),
+            ],
+          );
+        },
       ),
     );
   }

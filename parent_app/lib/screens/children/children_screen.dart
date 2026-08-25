@@ -216,6 +216,7 @@ class ProfileTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = child.effectiveStatus;
     final online = status == ChildStatus.online;
+    final removed = status == ChildStatus.removed;
     // No device linked yet — the profile has no status to show.
     final ringColor =
         child.paired ? status.color : AppColors.borderOf(context);
@@ -251,15 +252,19 @@ class ProfileTile extends StatelessWidget {
                       ),
                       child: CircleAvatar(
                         radius: 22,
-                        backgroundColor: child.avatarColor,
-                        child: Text(
-                          child.initials,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.w800,
-                            fontSize: 18,
-                          ),
-                        ),
+                        backgroundColor:
+                            removed ? AppColors.danger : child.avatarColor,
+                        child: removed
+                            ? const Icon(Icons.gpp_bad_rounded,
+                                color: Colors.white, size: 24)
+                            : Text(
+                                child.initials,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 18,
+                                ),
+                              ),
                       ),
                     ),
                     if (child.paired)

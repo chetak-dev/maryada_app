@@ -7,22 +7,25 @@ import '../theme/tokens.dart';
 /// background services, so a missed heartbeat used to flip a perfectly
 /// protected child to "Offline" until they opened the app. Only a missing
 /// permission — something the parent can actually act on — reads as offline.
-enum ChildStatus { online, offline }
+enum ChildStatus { online, offline, removed }
 
 extension ChildStatusUi on ChildStatus {
   String get label => switch (this) {
         ChildStatus.online => 'Protected',
         ChildStatus.offline => 'Needs attention',
+        ChildStatus.removed => 'App removed',
       };
 
   Color get color => switch (this) {
         ChildStatus.online => AppColors.success,
         ChildStatus.offline => AppColors.warning,
+        ChildStatus.removed => AppColors.danger,
       };
 
   IconData get icon => switch (this) {
         ChildStatus.online => Icons.verified_user_rounded,
         ChildStatus.offline => Icons.gpp_maybe_rounded,
+        ChildStatus.removed => Icons.gpp_bad_rounded,
       };
 }
 

@@ -25,15 +25,18 @@ object AppUpdater {
     const val ACTION_INSTALL_RESULT = "com.guardnest.kid.UPDATE_INSTALL_RESULT"
 
     /**
-     * The build number shown to people, next to the version name. Kept apart
-     * from `versionCode`, which only ever climbs so updates can install.
+     * e.g. "v1.0.0(24)" — the name people read plus the real versionCode, which
+     * is what actually decides whether an update applies. Showing the true
+     * number is the only way to tell which build a device is running.
      */
-    const val BUILD_LABEL = "0"
-
-    /** e.g. "v1.0.0(0)" — what both apps display for this build. */
     fun versionLabel(ctx: Context): String = try {
-        val name = ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
-        "v$name($BUILD_LABEL)"
+        val info = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            info.longVersionCode
+        } else {
+            @Suppress("DEPRECATION") info.versionCode.toLong()
+        }
+        "v${info.versionName}($code)"
     } catch (_: Exception) {
         ""
     }

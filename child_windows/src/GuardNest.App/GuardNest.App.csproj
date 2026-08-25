@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Maryada</AssemblyName>
+    <RootNamespace>GuardNest.App</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\GuardNest.Setup\Assets\logo.ico</ApplicationIcon>
+    <Version>1.0.7</Version>
+    <Product>Maryada</Product>
+    <Company>ISKCON Brahmapur</Company>
+    <Description>Maryada family protection for Windows.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\GuardNest.Core\GuardNest.Core.csproj" />
+    <ProjectReference Include="..\GuardNest.Service\GuardNest.Service.csproj" />
+    <ProjectReference Include="..\GuardNest.Agent\GuardNest.Agent.csproj" />
+    <ProjectReference Include="..\GuardNest.Setup\GuardNest.Setup.csproj" />
+  </ItemGroup>
+
+</Project>

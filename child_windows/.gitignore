@@ -1,0 +1,8 @@
+# .NET build output
+bin/
+obj/
+publish/
+dist/
+src/GuardNest.Setup/Payload/
+*.user
+.vs/

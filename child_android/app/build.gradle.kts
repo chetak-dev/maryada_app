@@ -1,4 +1,4 @@
-import java.io.FileInputStream
+﻿import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
@@ -8,7 +8,7 @@ plugins {
 }
 
 // Release signing is read from key.properties (gitignored) so the same key can
-// sign every build — required for remote updates to install over the old app.
+// sign every build â€” required for remote updates to install over the old app.
 val keystoreProperties = Properties()
 val keystorePropertiesFile = rootProject.file("key.properties")
 if (keystorePropertiesFile.exists()) {
@@ -23,7 +23,7 @@ android {
         applicationId = "com.guardnest.kid"
         minSdk = 24
         targetSdk = 35
-        versionCode = 23
+        versionCode = 25
         versionName = "1.0.0"
     }
 

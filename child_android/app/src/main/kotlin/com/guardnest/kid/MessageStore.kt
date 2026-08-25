@@ -106,30 +106,53 @@ object MessageStore {
         } catch (_: Exception) {
             null
         } ?: return
+        // Position within its chat decides which message an entry is, so the
+        // list has to come back in the order it was written — a set doesn't
+        // preserve it, hence the stored index.
+        val staged = HashMap<String, MutableList<Pair<Int, Entry>>>()
+        for (line in saved) {
+            // day, at, slot, side, index, then the two variable-length fields
+            // last so a label or a message containing the separator can't
+            // shift the parse.
+            val parts = line.split('\u0001', limit = 7)
+            if (parts.size < 7) continue
+            val day = parts[0].toLongOrNull() ?: continue
+            val at = parts[1].toLongOrNull() ?: continue
+            val slot = parts[2].toIntOrNull() ?: continue
+            val side = when (parts[3]) {
+                "1" -> true
+                "0" -> false
+                else -> null
+            }
+            val idx = parts[4].toIntOrNull() ?: continue
+            staged.getOrPut(parts[6]) { ArrayList(1) }
+                .add(idx to Entry(day, parts[5], side, slot, at))
+        }
         synchronized(lock) {
-            for (line in saved) {
-                // day, at, slot, side, then the two variable-length fields last
-                // so a label or a message containing the separator can't shift
-                // the parse.
-                val parts = line.split('\u0001', limit = 6)
-                if (parts.size < 6) continue
-                val day = parts[0].toLongOrNull() ?: continue
-                val at = parts[1].toLongOrNull() ?: continue
-                val slot = parts[2].toIntOrNull() ?: continue
-                val side = when (parts[3]) {
-                    "1" -> true
-                    "0" -> false
-                    else -> null
+            for ((loose, staging) in staged) {
+                staging.sortBy { it.first }
+                val entries = ArrayList<Entry>(staging.size)
+                for ((_, e) in staging) {
+                    entries.add(e)
+                    val group = groupKey(loose, e.day, e.label)
+                    groupSlots[group] = maxOf(groupSlots[group] ?: 0, e.slot + 1)
                 }
-                val loose = parts[5]
-                identities.getOrPut(loose) { ArrayList(1) }
-                    .add(Entry(day, parts[4], side, slot, at))
-                val group = groupKey(loose, day, parts[4])
-                groupSlots[group] = maxOf(groupSlots[group] ?: 0, slot + 1)
+                identities[loose] = entries
             }
         }
     }
 
+    /**
+     * Records one sighting of a message.
+     *
+     * [occurrence] is how many times this exact text has already appeared in
+     * the same scrape pass, which is what tells a genuinely repeated message
+     * apart from the same message being read again. Identity deliberately does
+     * NOT include the day or the clock label: those come from WhatsApp's
+     * floating date pill and per-bubble times, which shift with scroll
+     * position, and treating a disagreement as a different message filed a
+     * fresh copy every time the chat was reopened.
+     */
     fun record(
         app: String,
         sender: String,
@@ -138,6 +161,7 @@ object MessageStore {
         timeLabel: String = "",
         number: String = "",
         dayStart: Long = 0L,
+        occurrence: Int = 0,
     ): Boolean {
         if (text.isBlank()) return false
         val now = System.currentTimeMillis()
@@ -152,17 +176,16 @@ object MessageStore {
                 identities.remove(identities.keys.first())
             }
 
-            // A sighting matches a known message when nothing it *does* know
-            // contradicts it: a day-less or time-less scrape of a message we
-            // already resolved is that same message, not a new one.
-            val entry = list.firstOrNull { matches(it, dayStart, label, outgoing) }
-            if (entry == null) {
+            // More copies on screen than we've ever seen at once: this really
+            // is another message, not another reading of an old one.
+            if (occurrence >= list.size) {
                 val slot = nextSlot(loose, dayStart, label)
                 list.add(Entry(dayStart, label, outgoing, slot, now))
                 queue(Msg(app, sender, text, now, outgoing == true, label, number,
                     dayStart, slot, docKey(loose, dayStart, label)))
                 return true
             }
+            val entry = list[occurrence]
 
             val learnsDay = entry.day <= 0L && dayStart > 0L
             val learnsTime = !isClock(entry.label) && isClock(label)
@@ -190,20 +213,6 @@ object MessageStore {
     private fun queue(msg: Msg) {
         pending.addLast(msg)
         while (pending.size > PENDING_MAX) pending.removeFirst()
-    }
-
-    private fun matches(e: Entry, day: Long, label: String, side: Boolean?): Boolean {
-        if (day > 0L && e.day > 0L && e.day != day) return false
-        if (side != null && e.side != null && e.side != side) return false
-        // Only two real clock labels can disagree. Anything else the scrape
-        // picked up (a sender name, "Yesterday") counts as not knowing the time,
-        // so the good reading upgrades that message instead of adding a second.
-        if (isClock(label) && isClock(e.label) &&
-            timeKey(e.label) != timeKey(label)
-        ) {
-            return false
-        }
-        return true
     }
 
     private fun isClock(label: String) = CLOCK.matches(label.trim())
@@ -258,7 +267,7 @@ object MessageStore {
         val snapshot = synchronized(lock) {
             val out = HashSet<String>()
             for ((loose, list) in identities) {
-                for (e in list) {
+                list.forEachIndexed { idx, e ->
                     val side = when (e.side) {
                         true -> "1"
                         false -> "0"
@@ -266,7 +275,7 @@ object MessageStore {
                     }
                     out.add(
                         "${e.day}\u0001${e.at}\u0001${e.slot}\u0001$side" +
-                            "\u0001${e.label}\u0001$loose"
+                            "\u0001$idx\u0001${e.label}\u0001$loose"
                     )
                 }
             }
