@@ -233,6 +233,7 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
                       child: visible[i].child,
                       familyId: visible[i].familyId,
                       devices: _devices[visible[i].child.id],
+                      latestVersionCode: widget.latestVersionCode,
                     ),
                   ),
           ),
@@ -250,6 +251,7 @@ class ProfileTile extends StatelessWidget {
     required this.child,
     this.familyId,
     this.devices,
+    this.latestVersionCode = 0,
   });
 
   final Child child;
@@ -258,6 +260,17 @@ class ProfileTile extends StatelessWidget {
   /// Supplied when the caller already watches them, so the list doesn't open a
   /// second subscription per row.
   final List<Device>? devices;
+
+  /// The newest published build, for flagging devices that haven't taken it.
+  final int latestVersionCode;
+
+  /// True when any linked device is still on an older build. Devices that have
+  /// never reported a version are skipped rather than guessed at.
+  bool _updatePending(List<Device> devices) =>
+      latestVersionCode > 0 &&
+      devices.any(
+        (d) => d.appVersionCode > 0 && d.appVersionCode < latestVersionCode,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -273,8 +286,7 @@ class ProfileTile extends StatelessWidget {
   Widget _build(BuildContext context, List<Device> devices) {
     // Each device stamps the profile document, so its status is whichever one
     // reported last. The devices themselves are the truth.
-    final worst = ProfileStatus.worst(devices);
-    final status = child.effectiveStatus;
+    final worst = ProfileStatus.worst(devices);    final status = child.effectiveStatus;
     final removed = worst != null
         ? worst.likelyRemoved || worst.removalUnlocked
         : status == ChildStatus.removed;
@@ -394,6 +406,14 @@ class ProfileTile extends StatelessWidget {
                                 label: devices.length == 1
                                     ? devices.first.label
                                     : '${devices.length} devices',
+                              ),
+                            // Rolling out an update is otherwise invisible:
+                            // there was no way to tell which devices had
+                            // actually taken it.
+                            if (_updatePending(devices))
+                              _StatusPill(
+                                label: 'Update pending',
+                                color: AppColors.warning,
                               ),
                           ],
                         )

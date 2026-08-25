@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../data/app_update_repository.dart';
 import '../../data/db.dart';
 import '../../data/device_repository.dart';
 import '../../data/family_repository.dart';
@@ -41,6 +44,27 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
   late Child _child = widget.child;
   late String? _familyId = widget.familyId;
   late String _name = widget.child.name;
+
+  /// The newest published child build, so a device still on an older one can
+  /// be pointed at rather than the parent comparing version strings by eye.
+  int _latestVersionCode = 0;
+  StreamSubscription<AppUpdateConfig>? _updateSub;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Db.ready) {
+      _updateSub = AppUpdateRepository.instance.watch().listen((c) {
+        if (mounted) setState(() => _latestVersionCode = c.versionCode);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _updateSub?.cancel();
+    super.dispose();
+  }
 
   /// Which device's data the feature screens show. Null means every device.
   String? _deviceId;
@@ -159,6 +183,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                       childId: child.id,
                       devices: devices,
                       selectedId: _deviceId,
+                      latestVersionCode: _latestVersionCode,
                       onSelect: (id) => setState(() => _deviceId = id),
                     ),
                     const SizedBox(height: AppSpacing.lg),
@@ -906,6 +931,7 @@ class _DeviceList extends StatelessWidget {
     required this.childId,
     required this.devices,
     this.selectedId,
+    this.latestVersionCode = 0,
     required this.onSelect,
   });
 
@@ -913,6 +939,7 @@ class _DeviceList extends StatelessWidget {
   final String childId;
   final List<Device> devices;
   final String? selectedId;
+  final int latestVersionCode;
   final ValueChanged<String?> onSelect;
 
   Future<void> _confirmRemove(BuildContext context, Device device) async {
@@ -1047,6 +1074,7 @@ class _DeviceList extends StatelessWidget {
           _DeviceCard(
             device: devices[i],
             selected: devices[i].id == selectedId,
+            latestVersionCode: latestVersionCode,
             onTap: () => onSelect(devices[i].id),
             onRename: canEdit
                 ? () => _confirmRename(context, devices[i])
@@ -1069,12 +1097,14 @@ class _DeviceCard extends StatelessWidget {
     required this.device,
     required this.selected,
     required this.onTap,
+    this.latestVersionCode = 0,
     this.onRename,
     this.onRemove,
   });
 
   final Device device;
   final bool selected;
+  final int latestVersionCode;
   final VoidCallback onTap;
   final VoidCallback? onRename;
   final VoidCallback? onRemove;
@@ -1171,6 +1201,18 @@ class _DeviceCard extends StatelessWidget {
                               fontSize: 11.5,
                               fontWeight: FontWeight.w600,
                               color: AppColors.textMuted,
+                            ),
+                          ),
+                        // An OTA is otherwise invisible until it lands.
+                        if (latestVersionCode > 0 &&
+                            device.appVersionCode > 0 &&
+                            device.appVersionCode < latestVersionCode)
+                          Text(
+                            'Update pending',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.warning,
                             ),
                           ),
                       ],
