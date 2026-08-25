@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.Calendar
 
 /**
  * Central store for the child's web history.
@@ -30,14 +31,14 @@ object WebHistoryStore {
 
     private data class Search(val query: String, val engine: String, val at: Long)
 
-    private class Stat(var lastAt: Long) {
+    private class Stat(val domain: String, var lastAt: Long) {
         var totalMs: Long = 0L
         var count: Int = 0
         /** Why the domain was blocked; blank for visited sites. */
         var reason: String = ""
     }
 
-    private const val MAX = 200
+    private const val MAX = 700
     private const val MAX_SEARCHES = 300
     private const val ACTIVE_GAP_MS = 5 * 60 * 1000L
     private const val SEARCH_DEDUPE_MS = 30_000L
@@ -52,6 +53,7 @@ object WebHistoryStore {
 
     // Time-on-site tracking for the currently open page.
     private var activeDomain: String? = null
+    private var activeKey = ""
     private var activeSince = 0L
     private var activeSearchKey = ""
     private var lastSearchKey = ""
@@ -79,10 +81,12 @@ object WebHistoryStore {
                 return
             }
             finishActive(now)
-            val stat = visited.getOrPut(root) { Stat(now) }
+            val key = keyFor(root, now)
+            val stat = visited.getOrPut(key) { Stat(root, now) }
             stat.lastAt = now
             stat.count++
             activeDomain = root
+            activeKey = key
             activeSince = now
             trim(visited, now)
             dirty = true
@@ -131,11 +135,11 @@ object WebHistoryStore {
     internal fun endVisitAt(now: Long) = synchronized(lock) { finishActive(now) }
 
     private fun addActiveTime(now: Long) {
-        val domain = activeDomain ?: return
+        if (activeDomain == null) return
         val delta = now - activeSince
         activeSince = now
         if (delta !in 1..ACTIVE_GAP_MS) return
-        visited[domain]?.let {
+        visited[activeKey]?.let {
             it.totalMs += delta
             it.lastAt = now
             dirty = true
@@ -145,6 +149,7 @@ object WebHistoryStore {
     private fun finishActive(now: Long) {
         if (activeDomain != null) addActiveTime(now)
         activeDomain = null
+        activeKey = ""
         activeSince = 0L
         trim(visited, now)
     }
@@ -155,7 +160,7 @@ object WebHistoryStore {
         val root = normalize(domain) ?: return
         val now = System.currentTimeMillis()
         synchronized(lock) {
-            val stat = blocked.getOrPut(root) { Stat(now) }
+            val stat = blocked.getOrPut(keyFor(root, now)) { Stat(root, now) }
             stat.lastAt = now
             stat.count++
             if (reason.isNotEmpty()) stat.reason = reason
@@ -180,23 +185,23 @@ object WebHistoryStore {
             }
             trim(visited, now)
             trim(blocked, now)
-            val visitedList = visited.entries.sortedByDescending { it.value.lastAt }
+            val visitedList = visited.values.sortedByDescending { it.lastAt }
                 .map {
                     mapOf<String, Any>(
-                        "domain" to it.key,
-                        "at" to it.value.lastAt,
-                        "milliseconds" to it.value.totalMs,
-                        "seconds" to (it.value.totalMs / 1000L),
-                        "visits" to it.value.count,
+                        "domain" to it.domain,
+                        "at" to it.lastAt,
+                        "milliseconds" to it.totalMs,
+                        "seconds" to (it.totalMs / 1000L),
+                        "visits" to it.count,
                     )
                 }
-            val blockedList = blocked.entries.sortedByDescending { it.value.lastAt }
+            val blockedList = blocked.values.sortedByDescending { it.lastAt }
                 .map {
                     mapOf<String, Any>(
-                        "domain" to it.key,
-                        "at" to it.value.lastAt,
-                        "attempts" to it.value.count,
-                        "reason" to it.value.reason,
+                        "domain" to it.domain,
+                        "at" to it.lastAt,
+                        "attempts" to it.count,
+                        "reason" to it.reason,
                     )
                 }
             val searchList = searches.asReversed().map {
@@ -225,11 +230,27 @@ object WebHistoryStore {
         }
     }
 
+    /**
+     * Stats are bucketed per calendar day, so one domain visited on three days
+     * is three rows. Keying on the domain alone made every total a running
+     * lifetime figure that the parent then had to show against its last visit.
+     */
+    private fun keyFor(domain: String, at: Long): String = "${dayOf(at)}\u0000$domain"
+
+    private fun dayOf(ms: Long): Long {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = ms
+        return cal.get(Calendar.YEAR) * 10_000L +
+            (cal.get(Calendar.MONTH) + 1) * 100L +
+            cal.get(Calendar.DAY_OF_MONTH)
+    }
+
     internal fun resetForTest() = synchronized(lock) {
         visited.clear()
         blocked.clear()
         searches.clear()
         activeDomain = null
+        activeKey = ""
         activeSince = 0L
         activeSearchKey = ""
         lastSearchKey = ""
@@ -244,6 +265,7 @@ object WebHistoryStore {
         blocked.clear()
         searches.clear()
         activeDomain = null
+        activeKey = ""
         activeSince = 0L
         activeSearchKey = ""
         lastSearchKey = ""
@@ -259,10 +281,10 @@ object WebHistoryStore {
         try {
             fun arrayOf(map: LinkedHashMap<String, Stat>): JSONArray {
                 val arr = JSONArray()
-                for ((domain, s) in map) {
+                for (s in map.values) {
                     arr.put(
                         JSONObject()
-                            .put("domain", domain)
+                            .put("domain", s.domain)
                             .put("at", s.lastAt)
                             .put("totalMs", s.totalMs)
                             .put("count", s.count)
@@ -305,11 +327,11 @@ object WebHistoryStore {
                     if (at < cutoff) continue
                     val domain = o.optString("domain")
                     if (domain.isEmpty()) continue
-                    val s = Stat(at)
+                    val s = Stat(domain, at)
                     s.totalMs = o.optLong("totalMs")
                     s.count = o.optInt("count")
                     s.reason = o.optString("reason")
-                    map[domain] = s
+                    map[keyFor(domain, at)] = s
                 }
             }
             fill(visited, root.optJSONArray("visited"))

@@ -19,16 +19,25 @@ class DeviceRepository {
           .where((d) => d.data()['revoked'] != true)
           .map((d) => Device.fromDoc(d.id, d.data()))
           .toList();
-      // Online first, then most recently seen — the device a parent is looking
-      // for is the one doing something.
+      // A stable order. Sorting by "most recently seen" reshuffled the list
+      // every time a device sent a heartbeat, which also moved the default
+      // selection — so a parent could open a screen scoped to a device they
+      // had not chosen.
       devices.sort((a, b) {
-        if (a.isOnline != b.isOnline) return a.isOnline ? -1 : 1;
-        return (b.lastSeenAt?.millisecondsSinceEpoch ?? 0)
-            .compareTo(a.lastSeenAt?.millisecondsSinceEpoch ?? 0);
+        final platform = _platformRank(a).compareTo(_platformRank(b));
+        if (platform != 0) return platform;
+        final label = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+        return label != 0 ? label : a.id.compareTo(b.id);
       });
       return devices;
     });
   }
+
+  static int _platformRank(Device d) => switch (d.platform) {
+        'android' => 0,
+        'windows' => 1,
+        _ => 2,
+      };
 
   /// Removes one installation and everything it reported. The profile and its
   /// other devices stay; when this was the last device the whole activity
@@ -48,6 +57,7 @@ class DeviceRepository {
       'callHistory',
       'smsHistory',
       'youtubeHistory',
+      'appCalls',
     ]) {
       try {
         await childRef.collection(feed).doc(deviceId).delete();

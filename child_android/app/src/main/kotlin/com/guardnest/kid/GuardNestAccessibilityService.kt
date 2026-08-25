@@ -1725,6 +1725,10 @@ class GuardNestAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         AccessibilityController.service = this
+        // The stall clock has to stop the moment events flow again, or a kill
+        // that repaired itself would still trip the lockbox 10 minutes later.
+        ChildStore.setAccessibilityStallSince(this, 0L)
+        Permissions.invalidateCache()
         // If the child is coming back from Temporary Access, re-enabling
         // accessibility is the "restore protection" signal — lift the call-log/
         // SMS denials right away so monitoring resumes without waiting for a tick.

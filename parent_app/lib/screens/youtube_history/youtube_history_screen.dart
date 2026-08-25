@@ -145,7 +145,9 @@ class _YoutubeActivityView extends StatefulWidget {
 class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
   _Filter _filter = _Filter.all;
   _Sort _sort = _Sort.recent;
-  int _days = 1;
+
+  /// Days back to show; 0 is every day the devices still hold.
+  int _days = 0;
 
   // Built once: re-creating them inside build() re-subscribes on every
   // setState, which flashes the loading spinner each time a filter is tapped.
@@ -167,6 +169,7 @@ class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
 
   bool _inPeriod(DateTime? at) {
     if (at == null) return false;
+    if (_days == 0) return true;
     final now = DateTime.now();
     final start = DateTime(
       now.year,
@@ -174,6 +177,12 @@ class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
       now.day,
     ).subtract(Duration(days: _days - 1));
     return !at.isBefore(start);
+  }
+
+  static bool _isToday(DateTime? at) {
+    if (at == null) return false;
+    final now = DateTime.now();
+    return at.year == now.year && at.month == now.month && at.day == now.day;
   }
 
   @override
@@ -205,10 +214,14 @@ class _YoutubeActivityViewState extends State<_YoutubeActivityView> {
               .where((s) => _inPeriod(s.at))
               .toList();
 
-          final total = videos.fold(
-            Duration.zero,
-            (sum, v) => sum + Duration(seconds: v.watchedSeconds),
-          );
+          // The headline is always today, whatever period the list shows: a
+          // running month-long total answers no question a parent actually asks.
+          final total = (videoSnap.data ?? const <YoutubeVideo>[])
+              .where((v) => _isToday(v.at))
+              .fold(
+                Duration.zero,
+                (sum, v) => sum + Duration(seconds: v.watchedSeconds),
+              );
 
           final entries =
               <_Entry>[
@@ -352,6 +365,7 @@ class _SummaryCard extends StatelessWidget {
   final ValueChanged<_Filter> onFilter;
 
   static String _periodLabel(int d) => switch (d) {
+    0 => 'All history',
     1 => 'Today',
     7 => 'Last 7 days',
     _ => 'Last 30 days',
@@ -382,7 +396,7 @@ class _SummaryCard extends StatelessWidget {
             children: [
               const Expanded(
                 child: Text(
-                  'Time on YouTube',
+                  'Today on YouTube',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -421,7 +435,7 @@ class _SummaryCard extends StatelessWidget {
                 position: PopupMenuPosition.under,
                 tooltip: 'Period',
                 itemBuilder: (_) => [
-                  for (final d in [1, 7, 30])
+                  for (final d in [0, 1, 7, 30])
                     PopupMenuItem(value: d, child: Text(_periodLabel(d))),
                 ],
                 child: _CardPill(label: _periodLabel(days)),

@@ -38,10 +38,13 @@ object Permissions {
     fun hasOverlay(ctx: Context): Boolean = Settings.canDrawOverlays(ctx)
 
     /**
-     * True only when the service is both listed in the setting *and* actually
-     * connected. An app update leaves it enabled but unbound on some OEM ROMs:
-     * the switch still looks on while no events are delivered, so monitoring
-     * silently stops and the parent is told everything is fine.
+     * The accessibility GRANT — the service is listed in the system setting.
+     *
+     * This is deliberately not "is the service running". Vivo, Oppo and Xiaomi
+     * ROMs kill the service whenever they feel like it while leaving the switch
+     * on; treating that as a revoked permission dropped the phone into the
+     * lockbox and locked the child out of a device nobody had tampered with.
+     * A real revoke clears the setting, and that is still caught instantly.
      */
     fun hasAccessibility(ctx: Context): Boolean {
         val cn = ComponentName(ctx, GuardNestAccessibilityService::class.java)
@@ -49,8 +52,54 @@ object Permissions {
         val enabled = Settings.Secure.getString(
             ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
-        val listed = enabled.split(':').any { it.equals(cn, ignoreCase = true) }
-        return listed && AccessibilityController.service != null
+        return enabled.split(':').any { it.equals(cn, ignoreCase = true) }
+    }
+
+    /**
+     * Whether the granted service is actually connected. Granted but unbound
+     * means no events are delivered, so blocking and capture are silently dead
+     * and the child has to toggle it off and on again.
+     */
+    fun accessibilityBound(): Boolean = AccessibilityController.service != null
+
+    /** Granted, but not delivering events — needs re-enabling in Settings. */
+    fun accessibilityStalled(ctx: Context): Boolean =
+        hasAccessibility(ctx) && !accessibilityBound()
+
+    /**
+     * How long a granted-but-dead accessibility service is tolerated before the
+     * device counts as unprotected.
+     *
+     * An OEM power manager kills the service several times a day and it rebinds
+     * on its own, so reacting instantly locked the child out of an untampered
+     * phone. Tolerating it forever was worse: nothing would be monitored and
+     * the parent's screen would still read "Protected".
+     */
+    const val STALL_GRACE_MS = 10 * 60 * 1000L
+
+    /**
+     * Accessibility as the lockbox sees it: granted, and either alive or dead
+     * for less than [STALL_GRACE_MS].
+     *
+     * The stall clock is stamped here rather than by the caller. The enforcement
+     * tick only runs every 30s, and this is read from the 700ms lock guard, so
+     * waiting for the tick to stamp it meant an unstamped stall read as "dead"
+     * and slammed the lockbox shut the instant the service was killed — exactly
+     * the lockout the grace period exists to prevent.
+     */
+    fun accessibilityOk(ctx: Context): Boolean {
+        if (!hasAccessibility(ctx)) return false
+        val stalledSince = ChildStore.accessibilityStallSince(ctx)
+        if (accessibilityBound()) {
+            if (stalledSince != 0L) ChildStore.setAccessibilityStallSince(ctx, 0L)
+            return true
+        }
+        val now = System.currentTimeMillis()
+        if (stalledSince == 0L) {
+            ChildStore.setAccessibilityStallSince(ctx, now)
+            return true
+        }
+        return now - stalledSince < STALL_GRACE_MS
     }
 
     /**
@@ -74,7 +123,7 @@ object Permissions {
     fun allGranted(ctx: Context): Boolean {
         val value = hasUsageAccess(ctx) && hasCallLog(ctx) && hasSms(ctx) &&
             hasBatteryExemption(ctx) && hasDeviceAdmin(ctx) &&
-            hasOverlay(ctx) && hasAccessibility(ctx) && hasNotificationAccess(ctx)
+            hasOverlay(ctx) && accessibilityOk(ctx) && hasNotificationAccess(ctx)
         cached = value
         cachedAt = SystemClock.elapsedRealtime()
         return value
@@ -87,7 +136,7 @@ object Permissions {
         hasBatteryExemption(ctx),
         hasDeviceAdmin(ctx),
         hasOverlay(ctx),
-        hasAccessibility(ctx),
+        accessibilityOk(ctx),
         hasNotificationAccess(ctx),
     ).count { !it }
 

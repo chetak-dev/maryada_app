@@ -3,6 +3,7 @@ package com.guardnest.kid
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Calendar
 
 /**
  * Buffers YouTube videos the child watches, captured from the on-screen video
@@ -20,7 +21,7 @@ object YoutubeStore {
         var watchedMs: Long,
     )
 
-    private const val MAX = 400
+    private const val MAX = 700
     private const val RETAIN_MS = 31L * 24 * 60 * 60 * 1000 // ~1 month
     private const val FILE = "youtube_history.json"
 
@@ -29,9 +30,10 @@ object YoutubeStore {
     private const val MIN_WATCHED_MS = 20_000L
 
     private val lock = Any()
-    // Keyed by title + channel + duration. Title alone merged different videos
-    // that happened to share a name, and split one video whose title was shown
-    // truncated in the feed but in full on the watch page.
+    // Keyed by day + title + channel + duration. Title alone merged different
+    // videos that happened to share a name, and split one video whose title was
+    // shown truncated in the feed but in full on the watch page. The day keeps
+    // watch time attributed to the day it happened instead of one running total.
     private val videos = LinkedHashMap<String, Video>()
 
     @Volatile private var dirty = false
@@ -59,8 +61,8 @@ object YoutubeStore {
         val t = title.trim()
         if (t.length < 2) return
         val ch = channel.trim()
-        val key = keyOf(t, ch, durationMs)
         val now = System.currentTimeMillis()
+        val key = keyOf(t, ch, durationMs, now)
         synchronized(lock) {
             val existing = videos[key]
             if (existing == null) {
@@ -79,12 +81,20 @@ object YoutubeStore {
     }
 
     /**
-     * Identity of a video. Duration separates same-titled videos, and is
-     * bucketed to a second because sources report it slightly differently.
+     * Identity of a video on a given day. Duration separates same-titled videos,
+     * and is bucketed to a second because sources report it slightly differently.
      */
-    private fun keyOf(title: String, channel: String, durationMs: Long): String {
+    private fun keyOf(title: String, channel: String, durationMs: Long, at: Long): String {
         val bucket = if (durationMs > 0L) (durationMs / 1000).toString() else ""
-        return "${normalizeKey(title)}|${channel.lowercase()}|$bucket"
+        return "${dayOf(at)}|${normalizeKey(title)}|${channel.lowercase()}|$bucket"
+    }
+
+    private fun dayOf(ms: Long): Long {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = ms
+        return cal.get(Calendar.YEAR) * 10_000L +
+            (cal.get(Calendar.MONTH) + 1) * 100L +
+            cal.get(Calendar.DAY_OF_MONTH)
     }
 
     /** Collapses whitespace and trailing "…more"/ellipsis so the same video —
@@ -186,7 +196,7 @@ object YoutubeStore {
                 if (title.length < 2) continue
                 val channel = o.optString("channel")
                 val durationMs = o.optLong("durationMs")
-                videos[keyOf(title, channel, durationMs)] = Video(
+                videos[keyOf(title, channel, durationMs, at)] = Video(
                     title,
                     channel,
                     durationMs,

@@ -43,6 +43,10 @@ object Pkgs {
     fun isYoutube(pkg: String): Boolean =
         pkg in YOUTUBE || (pkg.contains("youtube") && !pkg.contains("music"))
 
+    /** True if [pkg] is WhatsApp (personal or Business). */
+    fun isWhatsApp(pkg: String): Boolean =
+        pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b"
+
     /** True if [pkg] is a home screen / launcher. */
     fun isLauncher(pkg: String): Boolean =
         pkg.contains("launcher") || pkg.contains("trebuchet") || pkg.endsWith(".home")

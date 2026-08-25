@@ -42,6 +42,20 @@ object ChildStore {
     // this device's own per-device documents.
     private const val KEY_REPORTS_MIGRATED = "reportsMigrated"
 
+    // The last point appended to the location trail. Held on disk because the
+    // OS restarts the service constantly, and an in-memory copy meant every
+    // restart recorded the child's current place again as if it were new.
+    private const val KEY_TRAIL_LAT = "trailLat"
+    private const val KEY_TRAIL_LNG = "trailLng"
+    private const val KEY_TRAIL_AT = "trailAt"
+
+    // When the accessibility service was first seen granted but not running.
+    // On disk because an OEM kill usually takes our own service with it.
+    private const val KEY_AX_STALL_SINCE = "accessibilityStallSince"
+
+    // The last parent-triggered sync this device has already acted on.
+    private const val KEY_SYNC_REQUESTED = "syncRequestedAt"
+
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -88,6 +102,40 @@ object ChildStore {
 
     fun setReportsMigrated(ctx: Context, value: Boolean) {
         prefs(ctx).edit().putBoolean(KEY_REPORTS_MIGRATED, value).apply()
+    }
+
+    /** The last point written to the location trail: lat, lng and when. */
+    fun lastTrailPoint(ctx: Context): Triple<Double, Double, Long>? {
+        val p = prefs(ctx)
+        if (!p.contains(KEY_TRAIL_LAT)) return null
+        return Triple(
+            java.lang.Double.longBitsToDouble(p.getLong(KEY_TRAIL_LAT, 0L)),
+            java.lang.Double.longBitsToDouble(p.getLong(KEY_TRAIL_LNG, 0L)),
+            p.getLong(KEY_TRAIL_AT, 0L),
+        )
+    }
+
+    fun setLastTrailPoint(ctx: Context, lat: Double, lng: Double, at: Long) {
+        prefs(ctx).edit()
+            .putLong(KEY_TRAIL_LAT, java.lang.Double.doubleToRawLongBits(lat))
+            .putLong(KEY_TRAIL_LNG, java.lang.Double.doubleToRawLongBits(lng))
+            .putLong(KEY_TRAIL_AT, at)
+            .apply()
+    }
+
+    /** 0 when the accessibility service is running normally. */
+    fun accessibilityStallSince(ctx: Context): Long =
+        prefs(ctx).getLong(KEY_AX_STALL_SINCE, 0L)
+
+    fun setAccessibilityStallSince(ctx: Context, at: Long) {
+        prefs(ctx).edit().putLong(KEY_AX_STALL_SINCE, at).apply()
+    }
+
+    fun syncRequestedAt(ctx: Context): Long =
+        prefs(ctx).getLong(KEY_SYNC_REQUESTED, 0L)
+
+    fun setSyncRequestedAt(ctx: Context, at: Long) {
+        prefs(ctx).edit().putLong(KEY_SYNC_REQUESTED, at).apply()
     }
 
     /** The family's display name (shown on the status screen), if known. */

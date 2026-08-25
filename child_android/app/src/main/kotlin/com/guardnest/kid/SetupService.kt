@@ -81,7 +81,12 @@ class SetupService : Service() {
     companion object {
         private const val REFRESH_MS = 4_000L
 
-        /** Banking mode turns protections off deliberately and has its own notice. */
+        /**
+         * Banking mode turns protections off deliberately and has its own notice.
+         * A killed accessibility service reaches this through [Permissions.allGranted],
+         * but only after its grace period — a kill that repairs itself in seconds
+         * must not flash a setup notice at the child.
+         */
         private fun stillNeeded(ctx: Context): Boolean =
             !ChildStore.tempAccessNotice(ctx) && !Permissions.allGranted(ctx)
 

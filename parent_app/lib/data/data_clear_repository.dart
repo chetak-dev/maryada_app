@@ -32,6 +32,7 @@ class DataClearRepository {
     'callHistory': ['calls'],
     'smsHistory': ['messages'],
     'youtubeHistory': ['videos'],
+    'appCalls': ['calls'],
   };
 
   /// Lists every paired child across all families (site admin only).
@@ -137,12 +138,15 @@ class DataClearRepository {
   Future<void> clearChildActivity(String familyId, String childId) async {
     await _clearChild(familyId, childId, null);
     await _clearAlerts(familyId, {childId}, null);
-    // The installed-apps report too, so the app-rules list empties with it.
+    // Every device's installed-apps report, so the app-rules list empties too.
     try {
-      await Db.child(familyId, childId)
+      final reports = await Db.child(familyId, childId)
           .collection('reports')
-          .doc('installedApps')
-          .delete();
+          .get();
+      await Future.wait([
+        for (final doc in reports.docs)
+          if (doc.id.startsWith('installedApps')) doc.reference.delete(),
+      ]);
     } catch (_) {}
   }
 
@@ -203,7 +207,8 @@ class DataClearRepository {
     final loc = childRef.collection('locationHistory');
     await Future.wait([
       for (final entry in _arrayDocs.entries) clearArrayDoc(entry),
-      if (cutoffMs == null) childRef.collection('usage').doc('summary').delete(),
+      // Usage is a document per device now, plus the legacy shared `summary`.
+      if (cutoffMs == null) _deleteQuery(childRef.collection('usage')),
       _deleteQuery(cutoffMs == null
           ? loc
           : loc.where('at',

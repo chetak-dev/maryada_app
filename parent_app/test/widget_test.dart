@@ -10,6 +10,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Welcome back'), findsOneWidget);
-    expect(find.text('Sign in'), findsWidgets);
+    // Sign-up and the email form were removed; access comes from a site-admin
+    // grant, so Google is the only way in.
+    expect(find.text('Continue with Google'), findsOneWidget);
   });
 }

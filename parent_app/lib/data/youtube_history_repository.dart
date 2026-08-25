@@ -71,12 +71,14 @@ class YoutubeHistoryRepository {
   }
 
   /// Collapses repeat entries for one video, summing watch time and keeping the
-  /// most recent timestamp. Keyed on title *and* channel: two different videos
-  /// can share a title, and merging on title alone hid one behind the other.
+  /// most recent timestamp. Keyed on title, channel *and* day: two different
+  /// videos can share a title, and merging across days would pile a month of
+  /// watch time onto whichever day it was last seen.
   List<YoutubeVideo> _merge(List<YoutubeVideo> videos) {
     String key(YoutubeVideo v) =>
         '${v.title.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim()}'
-        '|${v.channel.toLowerCase().trim()}';
+        '|${v.channel.toLowerCase().trim()}'
+        '|${Db.dayKey(v.at)}';
     final byKey = <String, YoutubeVideo>{};
     for (final v in videos) {
       final k = key(v);

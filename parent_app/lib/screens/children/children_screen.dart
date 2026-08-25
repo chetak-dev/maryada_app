@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../data/db.dart';
+import '../../data/device_repository.dart';
 import '../../data/family_repository.dart';
 import '../../models/child.dart';
+import '../../models/device.dart';
 import '../../screens/child_detail/child_detail_screen.dart';
 import '../../screens/children/new_profile_dialog.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/access_scope.dart';
+import '../../widgets/child_devices.dart';
 
 /// Which profiles the grid is showing.
 enum ChildFilter { all, online, offline }
@@ -20,12 +23,10 @@ extension ChildFilterInfo on ChildFilter {
         ChildFilter.offline => 'Needs attention',
       };
 
-  bool matches(Child c) => switch (this) {
+  bool matches(Child c, ChildStatus status) => switch (this) {
         ChildFilter.all => true,
-        ChildFilter.online =>
-          c.paired && c.effectiveStatus == ChildStatus.online,
-        ChildFilter.offline =>
-          c.paired && c.effectiveStatus == ChildStatus.offline,
+        ChildFilter.online => c.paired && status == ChildStatus.online,
+        ChildFilter.offline => c.paired && status != ChildStatus.online,
       };
 }
 
@@ -65,31 +66,71 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
   late List<({Child child, String familyId})> _kids = widget.children;
   StreamSubscription<List<({Child child, String familyId})>>? _sub;
 
+  // The devices of every listed profile, held here rather than in each tile so
+  // the filter counts and the tiles can never tell the parent two different
+  // things about the same profile.
+  final Map<String, List<Device>> _devices = {};
+  final Map<String, StreamSubscription<List<Device>>> _deviceSubs = {};
+
   @override
   void initState() {
     super.initState();
+    _syncDeviceSubs(_kids);
     if (Db.ready) {
       _sub = FamilyRepository.instance.watchMyChildren().listen((kids) {
-        if (mounted) setState(() => _kids = kids);
+        if (!mounted) return;
+        setState(() => _kids = kids);
+        _syncDeviceSubs(kids);
       });
     }
   }
 
+  void _syncDeviceSubs(List<({Child child, String familyId})> kids) {
+    if (!Db.ready) return;
+    final wanted = {for (final k in kids) k.child.id: k.familyId};
+    for (final id in _deviceSubs.keys.toList()) {
+      if (!wanted.containsKey(id)) {
+        _deviceSubs.remove(id)?.cancel();
+        _devices.remove(id);
+      }
+    }
+    for (final entry in wanted.entries) {
+      if (_deviceSubs.containsKey(entry.key) || entry.value.isEmpty) continue;
+      _deviceSubs[entry.key] = DeviceRepository.instance
+          .watch(entry.value, entry.key)
+          .listen((devices) {
+        if (mounted) setState(() => _devices[entry.key] = devices);
+      });
+    }
+  }
+
+  /// A profile's status, taken from its devices. The profile document is
+  /// stamped by every device, so on its own it reports whichever reported last.
+  ChildStatus _statusOf(Child c) {
+    final devices = _devices[c.id];
+    final worst = devices == null ? null : ProfileStatus.worst(devices);
+    if (worst == null) return c.effectiveStatus;
+    if (worst.likelyRemoved || worst.removalUnlocked) return ChildStatus.removed;
+    return worst.severity == 0 ? ChildStatus.online : ChildStatus.offline;
+  }
+
   @override
   void dispose() {
+    for (final sub in _deviceSubs.values) {
+      sub.cancel();
+    }
     _sub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
 
   /// Profiles missing a permission sort first — they're the ones needing a look.
-  static int _priority(Child c) =>
-      c.effectiveStatus == ChildStatus.offline ? 0 : 1;
+  int _priority(Child c) => _statusOf(c) == ChildStatus.online ? 1 : 0;
 
   List<({Child child, String familyId})> get _visible {
     final q = _query.trim().toLowerCase();
     final out = _kids.where((k) {
-      if (!_filter.matches(k.child)) return false;
+      if (!_filter.matches(k.child, _statusOf(k.child))) return false;
       if (q.isEmpty) return true;
       return k.child.name.toLowerCase().contains(q);
     }).toList();
@@ -102,7 +143,7 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
   }
 
   int _countFor(ChildFilter f) =>
-      _kids.where((k) => f.matches(k.child)).length;
+      _kids.where((k) => f.matches(k.child, _statusOf(k.child))).length;
 
   void _newProfile(BuildContext context) {
     final fid = widget.familyId;
@@ -191,6 +232,7 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
                     itemBuilder: (_, i) => ProfileTile(
                       child: visible[i].child,
                       familyId: visible[i].familyId,
+                      devices: _devices[visible[i].child.id],
                     ),
                   ),
           ),
@@ -207,24 +249,49 @@ class ProfileTile extends StatelessWidget {
     super.key,
     required this.child,
     this.familyId,
+    this.devices,
   });
 
   final Child child;
   final String? familyId;
 
+  /// Supplied when the caller already watches them, so the list doesn't open a
+  /// second subscription per row.
+  final List<Device>? devices;
+
   @override
   Widget build(BuildContext context) {
+    final known = devices;
+    if (known != null) return _build(context, known);
+    return ChildDevices(
+      familyId: familyId,
+      childId: child.id,
+      builder: (context, devices) => _build(context, devices),
+    );
+  }
+
+  Widget _build(BuildContext context, List<Device> devices) {
+    // Each device stamps the profile document, so its status is whichever one
+    // reported last. The devices themselves are the truth.
+    final worst = ProfileStatus.worst(devices);
     final status = child.effectiveStatus;
-    final online = status == ChildStatus.online;
-    final removed = status == ChildStatus.removed;
+    final removed = worst != null
+        ? worst.likelyRemoved || worst.removalUnlocked
+        : status == ChildStatus.removed;
+    final statusColor = worst?.statusColor ?? status.color;
+    final statusLabel = worst?.statusLabel ?? status.label;
+    final ok = worst != null
+        ? worst.severity == 0
+        : status == ChildStatus.online;
     // No device linked yet — the profile has no status to show.
     final ringColor =
-        child.paired ? status.color : AppColors.borderOf(context);
+        child.paired ? statusColor : AppColors.borderOf(context);
     final surface = AppColors.surfaceOf(context);
     return Container(
       decoration: BoxDecoration(
         color: surface,
         borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.borderOf(context)),
         boxShadow: AppShadow.card,
       ),
       clipBehavior: Clip.antiAlias,
@@ -276,14 +343,12 @@ class ProfileTile extends StatelessWidget {
                           height: 15,
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
-                            color: status.color,
+                            color: statusColor,
                             shape: BoxShape.circle,
                             border: Border.all(color: surface, width: 2),
                           ),
                           child: Icon(
-                            online
-                                ? Icons.check_rounded
-                                : Icons.close_rounded,
+                            ok ? Icons.check_rounded : Icons.close_rounded,
                             size: 9,
                             color: Colors.white,
                           ),
@@ -302,33 +367,42 @@ class ProfileTile extends StatelessWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontWeight: FontWeight.w700, fontSize: 16),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16.5,
+                          letterSpacing: -0.2,
+                        ),
                       ),
-                      const SizedBox(height: 5),
+                      const SizedBox(height: 7),
                       if (child.paired)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 9, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: status.color.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(AppRadius.pill),
-                          ),
-                          child: Text(
-                            status.label,
-                            style: TextStyle(
-                              color: status.color,
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.3,
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 5,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            _StatusPill(
+                              label: statusLabel,
+                              color: statusColor,
                             ),
-                          ),
+                            // Which devices those are: the status above is the
+                            // worst of them, so the count is what tells a
+                            // parent whether anything else is linked.
+                            if (devices.isNotEmpty)
+                              _MutedPill(
+                                icon: devices.length == 1
+                                    ? devices.first.icon
+                                    : Icons.devices_rounded,
+                                label: devices.length == 1
+                                    ? devices.first.label
+                                    : '${devices.length} devices',
+                              ),
+                          ],
                         )
                       else
                         const Text(
                           'No device linked',
                           style: TextStyle(
                             color: AppColors.textMuted,
-                            fontSize: 11,
+                            fontSize: 11.5,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -342,6 +416,84 @@ class ProfileTile extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The profile's state, coloured by how much attention it needs.
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.label, required this.color});
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A quiet fact next to the status — never competes with it for attention.
+class _MutedPill extends StatelessWidget {
+  const _MutedPill({required this.icon, required this.label});
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceMutedOf(context),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        border: Border.all(color: AppColors.borderOf(context)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: AppColors.textSecondaryOf(context)),
+          const SizedBox(width: 4),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 130),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppColors.textSecondaryOf(context),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

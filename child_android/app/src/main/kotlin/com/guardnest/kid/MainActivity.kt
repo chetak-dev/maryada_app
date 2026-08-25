@@ -480,7 +480,9 @@ class MainActivity : Activity() {
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
             "\uD83D\uDEAB", "App blocking",
-            hasAccessibility()
+            // A stalled service still shows its switch as on, so a green row
+            // here would tell the child there is nothing to do.
+            Permissions.accessibilityOk(this)
         ) { grantAccessibility() })
         col.addView(gap(dp(10)))
         col.addView(permissionRow(
@@ -497,6 +499,21 @@ class MainActivity : Activity() {
             "\uD83D\uDD14", "Notification access",
             hasNotificationAccess()
         ) { grantNotificationAccess() })
+
+        // This ROM stops background apps unless they are allow-listed by hand,
+        // and there is no way to read back whether it was done — so it is shown
+        // as a step to take, never as a tick.
+        if (AccessibilityGuard.needsAutoStartAllowance()) {
+            col.addView(gap(dp(10)))
+            col.addView(permissionRow(
+                "\u267B\uFE0F", "Allow auto-start",
+                granted = false,
+            ) {
+                if (!AccessibilityGuard.openAutoStartSettings(this)) {
+                    toast("Open Settings \u2192 Battery \u2192 Auto-start and allow Maryada.")
+                }
+            })
+        }
 
         col.addView(gap(dp(16)))
         col.addView(TextView(this).apply {
@@ -591,9 +608,16 @@ class MainActivity : Activity() {
     }
 
     private fun grantAccessibility() {
+        // Nothing for the child to do when the app can put the service back
+        // itself (WRITE_SECURE_SETTINGS granted at provisioning).
+        if (AccessibilityGuard.recover(this)) {
+            Permissions.invalidateCache()
+            uiHandler.postDelayed({ render() }, 400)
+            return
+        }
         try {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            armGrantWatch { hasAccessibility() }
+            armGrantWatch { Permissions.accessibilityOk(this) }
         } catch (_: Exception) {
         }
     }
@@ -920,42 +944,63 @@ class MainActivity : Activity() {
      * accessibility back on restores everything.
      */
     private fun onTemporaryAccess() {
-        android.app.AlertDialog.Builder(
-            this, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
-        )
-            .setTitle("Turn off monitoring?")
-            .setMessage(
-                "Temporary Access turns off Maryada’s accessibility service so " +
-                    "a banking app will run.\n\nYour device stays locked to your " +
-                    "parent’s allowed apps, and Maryada still can’t be " +
-                    "uninstalled.\n\nTo restore full protection, turn Maryada’s " +
-                    "Accessibility back on in Settings.\n\nAre you sure you want " +
-                    "to continue?"
-            )
-            .setCancelable(false)
-            .setPositiveButton("Yes, turn off") { _, _ ->
-                // Remember this was intentional so the enforcement service can
-                // restore protection once it returns.
-                ChildStore.setTempAccess(this, true)
-                TempAccessNotice.begin(this)
-                // Accessibility is the only thing banking apps object to, so it
-                // is the only protection this turns off — notification access
-                // and call/SMS access stay exactly as the child granted them.
-                WebFilterVpnService.stop(this)
-                // Turn off accessibility in the background.
-                if (!AccessibilityController.disable()) {
-                    // Fallback: open the accessibility screen to toggle it off.
-                    try {
-                        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    } catch (_: Exception) {
-                    }
+        showSheet(
+            emoji = "\uD83C\uDFE6",
+            title = "Turn off monitoring?",
+            message = "So a banking app will run.\n" +
+                "Only your allowed apps will work until you turn App blocking " +
+                "back on.",
+            confirmLabel = "Turn off",
+            dismissLabel = "Cancel",
+        ) {
+            // Remember this was intentional so the enforcement service can
+            // restore protection once it returns.
+            ChildStore.setTempAccess(this, true)
+            TempAccessNotice.begin(this)
+            // Accessibility is the only thing banking apps object to, so it
+            // is the only protection this turns off — notification access
+            // and call/SMS access stay exactly as the child granted them.
+            WebFilterVpnService.stop(this)
+            if (!AccessibilityController.disable()) {
+                // Fallback: open the accessibility screen to toggle it off.
+                try {
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (_: Exception) {
                 }
-                // Take the child to the permission screen once the change
-                // propagates (accessibility now shows as missing).
-                uiHandler.postDelayed({ render() }, 500)
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+            // Take the child to the permission screen once the change
+            // propagates (accessibility now shows as missing).
+            uiHandler.postDelayed({ render() }, 500)
+        }
+    }
+
+    /**
+     * Takes a published update now instead of waiting for the background check,
+     * which only runs every few hours. On a Device Owner device the install is
+     * silent, so the app simply restarts on the new build.
+     */
+    private fun onCheckForUpdate() {
+        toast("Checking\u2026")
+        AppUpdater.checkAndUpdate(this) { result ->
+            when (result) {
+                AppUpdater.CheckResult.UP_TO_DATE -> showSheet(
+                    "\u2705", "You're up to date",
+                    "${AppUpdater.versionLabel(this)} is the latest version.",
+                )
+                AppUpdater.CheckResult.DOWNLOADING -> showSheet(
+                    "\u2B07\uFE0F", "Update found",
+                    "Downloading now. The app will restart on its own.",
+                )
+                AppUpdater.CheckResult.BUSY -> showSheet(
+                    "\u23F3", "Already checking",
+                    "An update check is running.",
+                )
+                AppUpdater.CheckResult.FAILED -> showSheet(
+                    "\u26A0\uFE0F", "Couldn't check",
+                    "Check your internet connection and try again.",
+                )
+            }
+        }
     }
 
     /**
@@ -995,12 +1040,116 @@ class MainActivity : Activity() {
             }
         )
         sheet.addView(
+            sheetRow("\u2B07\uFE0F", "Check for update",
+                "Install the newest version your parent published") {
+                dialog.dismiss()
+                onCheckForUpdate()
+            }
+        )
+        sheet.addView(
             sheetRow("\uD83D\uDDD1\uFE0F", "Uninstall this app",
                 "Only after a parent removes this device") {
                 dialog.dismiss()
                 confirmUninstall()
             }
         )
+        dialog.setContentView(sheet)
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
+            setGravity(Gravity.BOTTOM)
+        }
+        dialog.show()
+    }
+
+    /**
+     * The app's own confirm sheet, so tapping a row from the ⋯ menu doesn't
+     * drop the child into a stock system dialog that looks nothing like the
+     * rest of the app. [confirmLabel] null makes it a plain acknowledgement.
+     */
+    private fun showSheet(
+        emoji: String,
+        title: String,
+        message: String,
+        confirmLabel: String? = null,
+        dismissLabel: String = "Close",
+        onConfirm: (() -> Unit)? = null,
+    ) {
+        val dialog = Dialog(this)
+        val sheet = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(22), dp(10), dp(22), dp(22))
+            background = GradientDrawable().apply {
+                setColor(cCard)
+                val r = dp(26).toFloat()
+                cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
+            }
+        }
+        sheet.addView(View(this).apply {
+            background = rounded(cMuted, dp(3), Color.TRANSPARENT, 0)
+            alpha = 0.35f
+            layoutParams = LinearLayout.LayoutParams(dp(38), dp(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                topMargin = dp(2)
+                bottomMargin = dp(18)
+            }
+        })
+        sheet.addView(TextView(this).apply {
+            text = emoji
+            textSize = 26f
+            gravity = Gravity.CENTER
+            val s = dp(62)
+            background = circle(dk("#ECEBFB", "#2A2540"))
+            layoutParams = LinearLayout.LayoutParams(s, s).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                bottomMargin = dp(14)
+            }
+        })
+        sheet.addView(TextView(this).apply {
+            text = title
+            textSize = 19f
+            setTextColor(cInk)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+        })
+        sheet.addView(TextView(this).apply {
+            text = message
+            textSize = 14f
+            setTextColor(cMuted)
+            gravity = Gravity.CENTER
+            setLineSpacing(dp(3).toFloat(), 1f)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = dp(8); bottomMargin = dp(22) }
+        })
+        if (confirmLabel != null) {
+            sheet.addView(filledButton(confirmLabel) {
+                dialog.dismiss()
+                onConfirm?.invoke()
+            })
+            sheet.addView(gap(dp(10)))
+            sheet.addView(TextView(this).apply {
+                text = dismissLabel
+                textSize = 14f
+                setTextColor(cMuted)
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setPadding(dp(18), dp(12), dp(18), dp(6))
+                isClickable = true
+                setOnClickListener { dialog.dismiss() }
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                )
+            })
+        } else {
+            sheet.addView(filledButton(dismissLabel) { dialog.dismiss() })
+        }
         dialog.setContentView(sheet)
         dialog.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
@@ -1020,8 +1169,7 @@ class MainActivity : Activity() {
         subtitle: String,
         onTap: () -> Unit,
     ): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+        val row = LinearLayout(this).apply {            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(14), dp(14), dp(14))
             background = ripple(
@@ -1066,18 +1214,13 @@ class MainActivity : Activity() {
     }
 
     private fun confirmUninstall() {
-        android.app.AlertDialog.Builder(
-            this, android.R.style.Theme_DeviceDefault_Light_Dialog_Alert
-        )
-            .setTitle("Uninstall this app?")
-            .setMessage(
-                "Maryada can only be removed after your parent removes this " +
-                    "device from the family. Tap Check to see whether that has " +
-                    "been done."
-            )
-            .setPositiveButton("Check") { _, _ -> unlinkIfRemoved() }
-            .setNegativeButton("Cancel", null)
-            .show()
+        showSheet(
+            emoji = "\uD83D\uDDD1\uFE0F",
+            title = "Uninstall Maryada?",
+            message = "Your parent has to remove this device first.",
+            confirmLabel = "Check now",
+            dismissLabel = "Cancel",
+        ) { unlinkIfRemoved() }
     }
 
     /**
@@ -1104,7 +1247,11 @@ class MainActivity : Activity() {
                 if (!doc.exists()) {
                     performLocalUnlink()
                 } else {
-                    toast("Hare Krishna, Kindly contact your Admin for this. Thanks")
+                    showSheet(
+                        "\uD83D\uDD12", "Still linked",
+                        "This device is still in your family. Ask your parent " +
+                            "to remove it first.",
+                    )
                 }
             }
             .addOnFailureListener {

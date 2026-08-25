@@ -53,6 +53,25 @@ class WebHistoryStoreTest {
     }
 
     @Test
+    fun `the same site on two days is two rows`() {
+        val dayOne = 1_000L
+        val dayTwo = dayOne + 2 * 24 * 60 * 60 * 1000L
+        WebHistoryStore.recordVisitAt("example.com", dayOne)
+        WebHistoryStore.recordVisitAt("example.com", dayOne + 5_000L)
+        WebHistoryStore.endVisitAt(dayOne + 5_000L)
+        WebHistoryStore.recordVisitAt("example.com", dayTwo)
+        WebHistoryStore.recordVisitAt("example.com", dayTwo + 9_000L)
+        WebHistoryStore.endVisitAt(dayTwo + 9_000L)
+
+        val visited = WebHistoryStore.snapshotAt(dayTwo + 9_000L).visited
+        // Newest first. One running lifetime total per domain made "today" on
+        // the parent's screen a month of accumulated time.
+        assertEquals(2, visited.size)
+        assertEquals(listOf(9L, 5L), visited.map { it["seconds"] })
+        assertEquals(listOf("example.com", "example.com"), visited.map { it["domain"] })
+    }
+
+    @Test
     fun `parses submitted Google search and decodes its query`() {
         val search = WebHistoryStore.parseSearch(
             "https://www.google.com/search?q=lord+jagannath+temple&sourceid=chrome"

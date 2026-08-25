@@ -7,12 +7,14 @@ import '../../models/child.dart';
 import '../../models/device.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/access_scope.dart';
+import '../../widgets/child_devices.dart';
 import '../../widgets/dialog_buttons.dart';
 import '../../widgets/feedback.dart';
 import '../../widgets/net_guard.dart';
 import '../../widgets/typed_danger_dialog.dart';
 import '../../widgets/whatsapp_mark.dart';
 import '../activity/activity_screen.dart';
+import '../app_activity/app_activity_screen.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../call_history/call_history_screen.dart';
 import '../chat_history/chat_history_screen.dart';
@@ -74,84 +76,123 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
           const SizedBox(width: AppSpacing.xs),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(
-          AppSpacing.md,
-          AppSpacing.sm,
-          AppSpacing.md,
-          AppSpacing.xxl,
-        ),
-        children: [
-          if (Db.ready)
-            _ChildSwitcher(currentId: child.id, onSelect: _switchTo),
-          if (child.hasRecentError) ...[
-            _DeviceIssueCard(child: child),
-            const SizedBox(height: AppSpacing.md),
-          ],
-          if (_live) ...[
-            Row(
-              children: [
-                Expanded(
-                  child: Text('Devices', style: theme.textTheme.titleMedium),
+      // One subscription for the whole page: the profile document is
+      // stamped by every device, so its status, version and last error are
+      // whichever device reported last. The devices are the truth.
+      body: ChildDevices(
+        familyId: familyId,
+        childId: child.id,
+        builder: (context, devices) {
+          final faulty = ProfileStatus.faulty(devices);
+          final erroring = devices.where((d) => d.hasRecentError).toList();
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Pinned: which child you are looking at, and their status. Both
+              // scrolled away, so half way down the page there was nothing
+              // saying whose data was on screen.
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.md,
+                  AppSpacing.sm,
+                  AppSpacing.md,
+                  0,
                 ),
-                if (canEdit)
-                  TextButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            PairDeviceScreen(familyId: familyId!, child: child),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (Db.ready)
+                      _ChildSwitcher(
+                        currentId: child.id,
+                        onSelect: _switchTo,
                       ),
+                    _ProfileHeaderCard(
+                      name: _name,
+                      child: child,
+                      devices: devices,
+                      faulty: faulty,
                     ),
-                    icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('Add device'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppSpacing.md),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    0,
+                    AppSpacing.md,
+                    AppSpacing.xxl,
                   ),
-              ],
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            _DeviceList(
-              familyId: familyId!,
-              childId: child.id,
-              selectedId: _deviceId,
-              onSelect: (id) => setState(() => _deviceId = id),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-          ],
-          Text('Manage', style: theme.textTheme.titleMedium),
-          const SizedBox(height: AppSpacing.sm),
-          // A centered Wrap instead of a grid: with an odd tile count the last
-          // tile sits in the middle rather than hanging left.
-          LayoutBuilder(
-            builder: (context, constraints) {
-              final w = (constraints.maxWidth - AppSpacing.sm) / 2;
-              final h = w / 1.15;
-              Widget cell(Widget tile) =>
-                  SizedBox(width: w, height: h, child: tile);
-              // A PC cannot report calls or SMS, so those tiles would open a
-              // screen that stays empty for good. Devices declare what they can
-              // report and the tiles follow.
-              return StreamBuilder<List<Device>>(
-                stream: _live
-                    ? DeviceRepository.instance.watch(familyId!, child.id)
-                    : null,
-                builder: (context, snap) {
-                  final devices = snap.data ?? const <Device>[];
-                  final effectiveDeviceId =
-                      _deviceId ??
-                      (devices.isNotEmpty ? devices.first.id : null);
-                  // With one device selected the tiles describe that device
-                  // rather than the whole profile.
-                  final scope = effectiveDeviceId == null
-                      ? devices
-                      : devices
-                            .where((d) => d.id == effectiveDeviceId)
-                            .toList();
-                  bool has(String feature) =>
-                      DeviceFeature.supportedBy(scope, feature);
-                  final selectedPlatform =
-                      effectiveDeviceId == null || scope.isEmpty
-                      ? null
-                      : scope.first.platform;
-                  return Wrap(
+                  children: [
+                  for (final device in erroring) ...[
+                    _DeviceIssueCard(device: device),
+                    const SizedBox(height: AppSpacing.md),
+                  ],
+                  if (_live) ...[
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Devices',
+                            style: theme.textTheme.titleMedium,
+                          ),
+                        ),
+                        if (canEdit)
+                          TextButton.icon(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => PairDeviceScreen(
+                                  familyId: familyId!,
+                                  child: child,
+                                ),
+                              ),
+                            ),
+                            icon: const Icon(Icons.add_rounded, size: 18),
+                            label: const Text('Add device'),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.xs),
+                    _DeviceList(
+                      familyId: familyId!,
+                      childId: child.id,
+                      devices: devices,
+                      selectedId: _deviceId,
+                      onSelect: (id) => setState(() => _deviceId = id),
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                  ],
+                  Text('Manage', style: theme.textTheme.titleMedium),
+                  const SizedBox(height: AppSpacing.sm),
+                  // A centered Wrap instead of a grid: with an odd tile count
+                  // the last tile sits in the middle rather than hanging left.
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final w = (constraints.maxWidth - AppSpacing.sm) / 2;
+                      final h = w / 1.15;
+                      Widget cell(Widget tile) =>
+                          SizedBox(width: w, height: h, child: tile);
+                      // A PC cannot report calls or SMS, so those tiles would
+                      // open a screen that stays empty for good. Devices
+                      // declare what they can report and the tiles follow.
+                      final effectiveDeviceId =
+                          _deviceId ??
+                          (devices.isNotEmpty ? devices.first.id : null);
+                      // With one device selected the tiles describe that device
+                      // rather than the whole profile.
+                      final scope = effectiveDeviceId == null
+                          ? devices
+                          : devices
+                                .where((d) => d.id == effectiveDeviceId)
+                                .toList();
+                      bool has(String feature) =>
+                          DeviceFeature.supportedBy(scope, feature);
+                      final selectedPlatform =
+                          effectiveDeviceId == null || scope.isEmpty
+                          ? null
+                          : scope.first.platform;
+                      return Wrap(
                     spacing: AppSpacing.sm,
                     runSpacing: AppSpacing.sm,
                     alignment: WrapAlignment.center,
@@ -206,6 +247,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                                   familyId: familyId,
                                   childId: child.id,
                                   deviceId: effectiveDeviceId,
+                                  platform: selectedPlatform,
                                 ),
                               ),
                             ),
@@ -262,12 +304,35 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                                   familyId: familyId,
                                   childId: child.id,
                                   deviceId: effectiveDeviceId,
+                                  deviceLabel: scope.isEmpty
+                                      ? null
+                                      : scope.first.label,
                                   platform: selectedPlatform,
                                 ),
                               ),
                             ),
                           ),
                         ),
+                      cell(
+                        _FeatureTile(
+                          icon: Icons.bar_chart_rounded,
+                          color: AppColors.primary,
+                          title: 'App activity',
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => AppActivityScreen(
+                                childName: _name,
+                                familyId: familyId,
+                                childId: child.id,
+                                deviceId: effectiveDeviceId,
+                                deviceLabel: scope.isEmpty
+                                    ? null
+                                    : scope.first.label,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                       if (has(DeviceFeature.location))
                         cell(
                           _FeatureTile(
@@ -287,31 +352,36 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                         ),
                     ],
                   );
-                },
-              );
-            },
-          ),
-          const SizedBox(height: AppSpacing.xxl),
-          if (canEdit)
-            OutlinedButton.icon(
-              onPressed: () => _confirmDeleteProfile(context),
-              icon: const Icon(
-                Icons.delete_forever_rounded,
-                color: AppColors.danger,
-                size: 18,
-              ),
-              label: const Text(
-                'Delete profile',
-                style: TextStyle(color: AppColors.danger),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(
-                  color: AppColors.danger.withValues(alpha: 0.4),
-                ),
-                padding: const EdgeInsets.symmetric(vertical: AppSpacing.sm),
+                    },
+                  ),
+                  const SizedBox(height: AppSpacing.xxl),
+                  if (canEdit)
+                    OutlinedButton.icon(
+                      onPressed: () => _confirmDeleteProfile(context),
+                      icon: const Icon(
+                        Icons.delete_forever_rounded,
+                        color: AppColors.danger,
+                        size: 18,
+                      ),
+                      label: const Text(
+                        'Delete profile',
+                        style: TextStyle(color: AppColors.danger),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(
+                          color: AppColors.danger.withValues(alpha: 0.4),
+                        ),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: AppSpacing.sm,
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -357,7 +427,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Couldn\u2019t rename â€” ${friendlyError(e)}'),
+              content: Text('Couldn\u2019t rename \u2014 ${friendlyError(e)}'),
             ),
           );
         }
@@ -371,7 +441,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
 
-    // Devices must be removed one by one first â€” deleting a profile under a
+    // Devices must be removed one by one first: deleting a profile under a
     // live installation would leave it enforcing rules nobody can manage.
     if (_live) {
       final devices = await DeviceRepository.instance
@@ -386,7 +456,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
             content: Text(
               '$_name still has ${devices.length} linked '
               'device${devices.length == 1 ? '' : 's'}. Remove each device '
-              '(â‹® next to it above) before deleting the profile.',
+              '(\u22EE next to it above) before deleting the profile.',
             ),
             actions: [
               DialogConfirmButton(
@@ -407,7 +477,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
       builder: (ctx) => TypedDangerDialog(
         title: 'Delete this profile?',
         warning:
-            'This removes $_nameâ€™s profile and all saved activity. '
+            'This removes $_name\u2019s profile and all saved activity. '
             'This cannot be undone.',
         prompt: 'Type the profile name to confirm:',
         expected: _name,
@@ -423,14 +493,14 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
       try {
         await Net.withProgress(
           context,
-          'Deleting $_nameâ€™s profileâ€¦',
+          'Deleting $_name\u2019s profile\u2026',
           () => FamilyRepository.instance.deleteProfile(_familyId!, _child.id),
         );
       } catch (e) {
         messenger.showSnackBar(
           SnackBar(
             content: Text(
-              'Couldn\u2019t delete the profile â€” ${friendlyError(e)}',
+              'Couldn\u2019t delete the profile \u2014 ${friendlyError(e)}',
             ),
           ),
         );
@@ -444,16 +514,212 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
   }
 }
 
-class _DeviceIssueCard extends StatelessWidget {
-  const _DeviceIssueCard({required this.child});
+/// The profile at the top of its own page: who this is, what is linked and
+/// whether anything needs doing. The app bar only had room for the name.
+class _ProfileHeaderCard extends StatelessWidget {
+  const _ProfileHeaderCard({
+    required this.name,
+    required this.child,
+    required this.devices,
+    required this.faulty,
+  });
+
+  final String name;
   final Child child;
+  final List<Device> devices;
+
+  /// The device a parent should deal with first, if any.
+  final Device? faulty;
+
+  @override
+  Widget build(BuildContext context) {
+    final worst = ProfileStatus.worst(devices);
+    final status = child.effectiveStatus;
+    final statusColor = worst?.statusColor ?? status.color;
+    final statusLabel = worst?.statusLabel ?? status.label;
+    final removed = worst != null
+        ? worst.likelyRemoved || worst.removalUnlocked
+        : status == ChildStatus.removed;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppColors.borderOf(context)),
+        boxShadow: AppShadow.card,
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(2.5),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: child.paired
+                    ? statusColor
+                    : AppColors.borderOf(context),
+                width: 2.5,
+              ),
+            ),
+            child: CircleAvatar(
+              radius: 26,
+              backgroundColor: removed ? AppColors.danger : child.avatarColor,
+              child: removed
+                  ? const Icon(
+                      Icons.gpp_bad_rounded,
+                      color: Colors.white,
+                      size: 26,
+                    )
+                  : Text(
+                      name.trim().isEmpty
+                          ? '?'
+                          : name.trim()[0].toUpperCase(),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 21,
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.3,
+                    color: AppColors.textPrimaryOf(context),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (!child.paired)
+                  Text(
+                    'No device linked',
+                    style: TextStyle(
+                      color: AppColors.textSecondaryOf(context),
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  )
+                else
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 5,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      _HeaderPill(
+                        label: statusLabel,
+                        color: statusColor,
+                        dot: true,
+                      ),
+                      if (devices.isNotEmpty)
+                        _HeaderPill(
+                          label: devices.length == 1
+                              ? devices.first.label
+                              : '${devices.length} devices',
+                          color: AppColors.textSecondaryOf(context),
+                          icon: devices.length == 1
+                              ? devices.first.icon
+                              : Icons.devices_rounded,
+                        ),
+                    ],
+                  ),
+                // With several devices the pill above is the worst of them, so
+                // name which one it is or the parent has to open each in turn.
+                if (faulty != null && devices.length > 1) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Needs attention on ${faulty!.label}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: faulty!.statusColor,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeaderPill extends StatelessWidget {
+  const _HeaderPill({
+    required this.label,
+    required this.color,
+    this.icon,
+    this.dot = false,
+  });
+
+  final String label;
+  final Color color;
+  final IconData? icon;
+  final bool dot;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (dot)
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+          if (icon != null) Icon(icon, size: 11, color: color),
+          const SizedBox(width: 5),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 150),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.2,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceIssueCard extends StatelessWidget {
+  const _DeviceIssueCard({required this.device});
+  final Device device;
 
   /// The device reports a raw exception string, which is for diagnosing a
-  /// remote device â€” not something to put in front of a parent.
+  /// remote device, not something to put in front of a parent.
   static String _plainEnglish(String raw) {
     final e = raw.toLowerCase();
     if (e.contains('permission_denied') || e.contains('permission denied')) {
-      return 'The device was refused access to your familyâ€™s settings.';
+      return 'The device was refused access to your family\u2019s settings.';
     }
     if (e.contains('unavailable') || e.contains('network')) {
       return 'The device could not reach the internet.';
@@ -466,7 +732,7 @@ class _DeviceIssueCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final at = child.lastErrorAt;
+    final at = device.lastErrorAt;
     final ago = at == null ? null : DateTime.now().difference(at);
     final when = ago == null
         ? ''
@@ -495,8 +761,8 @@ class _DeviceIssueCard extends StatelessWidget {
               children: [
                 Text(
                   when.isEmpty
-                      ? 'The device reported a problem'
-                      : 'The device reported a problem Â· $when',
+                      ? '${device.label} reported a problem'
+                      : '${device.label} reported a problem \u00b7 $when',
                   style: const TextStyle(
                     color: AppColors.warning,
                     fontWeight: FontWeight.w600,
@@ -505,7 +771,7 @@ class _DeviceIssueCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _plainEnglish(child.lastError ?? ''),
+                  _plainEnglish(device.lastError ?? ''),
                   style: TextStyle(
                     color: AppColors.textSecondaryOf(context),
                     fontSize: 12,
@@ -630,19 +896,22 @@ class _SwitcherChip extends StatelessWidget {
   }
 }
 
-/// The devices attached to this profile, side by side so more devices widen
-/// the strip instead of pushing the rest of the page down. Tapping one scopes
-/// the feature screens to it.
+/// The devices attached to this profile, one full-width row each. Squeezing
+/// two side by side (or three into circular chips) cut the status and version
+/// off exactly when a profile had enough devices for them to matter. Tapping
+/// one scopes the feature screens to it.
 class _DeviceList extends StatelessWidget {
   const _DeviceList({
     required this.familyId,
     required this.childId,
+    required this.devices,
     this.selectedId,
     required this.onSelect,
   });
 
   final String familyId;
   final String childId;
+  final List<Device> devices;
   final String? selectedId;
   final ValueChanged<String?> onSelect;
 
@@ -669,7 +938,7 @@ class _DeviceList extends StatelessWidget {
     try {
       await Net.withProgress(
         context,
-        'Removing ${device.label}â€¦',
+        'Removing ${device.label}\u2026',
         () => DeviceRepository.instance.revoke(familyId, childId, device.id),
       );
       messenger.showSnackBar(
@@ -679,7 +948,7 @@ class _DeviceList extends StatelessWidget {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            'Couldn\u2019t remove the device â€” ${friendlyError(e)}',
+            'Couldn\u2019t remove the device \u2014 ${friendlyError(e)}',
           ),
         ),
       );
@@ -730,7 +999,7 @@ class _DeviceList extends StatelessWidget {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-            'Couldn\u2019t rename the device â€” ${friendlyError(e)}',
+            'Couldn\u2019t rename the device \u2014 ${friendlyError(e)}',
           ),
         ),
       );
@@ -740,97 +1009,65 @@ class _DeviceList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canEdit = AccessScope.of(context);
-    return StreamBuilder<List<Device>>(
-      stream: DeviceRepository.instance.watch(familyId, childId),
-      builder: (context, snap) {
-        final devices = snap.data ?? const <Device>[];
-        if (devices.isEmpty) {
-          return Card(
-            margin: EdgeInsets.zero,
-            child: Padding(
-              padding: const EdgeInsets.all(AppSpacing.md),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.smartphone_rounded,
-                    color: AppColors.textMuted,
-                    size: 20,
-                  ),
-                  const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: Text(
-                      snap.connectionState == ConnectionState.waiting
-                          ? 'Loading devicesâ€¦'
-                          : 'This device will appear here after it next checks in.',
-                      style: const TextStyle(
-                        color: AppColors.textMuted,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-        // The feature screens always show one device, so pick the first as
-        // soon as the list arrives rather than leaving nothing selected.
-        if (selectedId == null || devices.every((d) => d.id != selectedId)) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            onSelect(devices.first.id);
-          });
-        }
-        Widget tile(Device d) => _DeviceCard(
-          device: d,
-          selected: d.id == selectedId,
-          compact: devices.length > 1,
-          onTap: () => onSelect(d.id),
-          onRename: canEdit ? () => _confirmRename(context, d) : null,
-          onRemove: canEdit ? () => _confirmRemove(context, d) : null,
-        );
-        // One or two devices read better as full cards; beyond that they'd be
-        // too narrow, so they become a scrollable strip of chips.
-        if (devices.length <= 2) {
-          return Row(
+    if (devices.isEmpty) {
+      return Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Row(
             children: [
-              for (var i = 0; i < devices.length; i++) ...[
-                if (i > 0) const SizedBox(width: AppSpacing.sm),
-                Expanded(child: tile(devices[i])),
-              ],
+              const Icon(
+                Icons.smartphone_rounded,
+                color: AppColors.textMuted,
+                size: 20,
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              const Expanded(
+                child: Text(
+                  'This device will appear here after it next checks in.',
+                  style: TextStyle(color: AppColors.textMuted, fontSize: 13),
+                ),
+              ),
             ],
-          );
-        }
-        return SizedBox(
-          height: 104,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: devices.length,
-            separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.md),
-            itemBuilder: (_, i) {
-              final d = devices[i];
-              return _DeviceTile(
-                device: d,
-                selected: d.id == selectedId,
-                onTap: () => onSelect(d.id),
-                onRename: canEdit ? () => _confirmRename(context, d) : null,
-                onRemove: canEdit ? () => _confirmRemove(context, d) : null,
-              );
-            },
           ),
-        );
-      },
+        ),
+      );
+    }
+    // The feature screens always show one device, so pick the first as
+    // soon as the list arrives rather than leaving nothing selected.
+    if (selectedId == null || devices.every((d) => d.id != selectedId)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onSelect(devices.first.id);
+      });
+    }
+    return Column(
+      children: [
+        for (var i = 0; i < devices.length; i++) ...[
+          if (i > 0) const SizedBox(height: AppSpacing.sm),
+          _DeviceCard(
+            device: devices[i],
+            selected: devices[i].id == selectedId,
+            onTap: () => onSelect(devices[i].id),
+            onRename: canEdit
+                ? () => _confirmRename(context, devices[i])
+                : null,
+            onRemove: canEdit
+                ? () => _confirmRemove(context, devices[i])
+                : null,
+          ),
+        ],
+      ],
     );
   }
 }
 
-/// A device shown as a full card â€” used while the profile has one or two of
-/// them, where the name and status fit properly instead of being squeezed
-/// under a circle.
+/// A device as a full-width card: its platform, the parent's name for it, its
+/// status and the version it is running. Every one of those is per device, so
+/// they must survive a profile that has several.
 class _DeviceCard extends StatelessWidget {
   const _DeviceCard({
     required this.device,
     required this.selected,
-    required this.compact,
     required this.onTap,
     this.onRename,
     this.onRemove,
@@ -838,9 +1075,6 @@ class _DeviceCard extends StatelessWidget {
 
   final Device device;
   final bool selected;
-
-  /// Two side by side: the same card with less room to spend.
-  final bool compact;
   final VoidCallback onTap;
   final VoidCallback? onRename;
   final VoidCallback? onRemove;
@@ -848,7 +1082,6 @@ class _DeviceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasMenu = onRename != null || onRemove != null;
-    final iconSize = compact ? 40.0 : 46.0;
     return Material(
       color: AppColors.surfaceOf(context),
       borderRadius: BorderRadius.circular(AppRadius.lg),
@@ -872,8 +1105,8 @@ class _DeviceCard extends StatelessWidget {
           child: Row(
             children: [
               Container(
-                width: iconSize,
-                height: iconSize,
+                width: 46,
+                height: 46,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: device.platformColor.withValues(alpha: 0.12),
@@ -882,7 +1115,7 @@ class _DeviceCard extends StatelessWidget {
                 child: Icon(
                   device.icon,
                   color: device.platformColor,
-                  size: compact ? 20 : 24,
+                  size: 24,
                 ),
               ),
               const SizedBox(width: AppSpacing.sm),
@@ -896,50 +1129,63 @@ class _DeviceCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: compact ? 13.5 : 15,
+                        fontSize: 15,
                         fontWeight: FontWeight.w700,
                         color: AppColors.textPrimaryOf(context),
                       ),
                     ),
                     const SizedBox(height: 3),
-                    Row(
+                    // Status and version wrap rather than compete: a long
+                    // status used to push the version off the end of the row.
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            color: device.statusColor,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        Flexible(
-                          child: Text(
-                            device.statusLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: device.statusColor,
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 7,
+                              height: 7,
+                              decoration: BoxDecoration(
+                                color: device.statusColor,
+                                shape: BoxShape.circle,
+                              ),
                             ),
-                          ),
+                            const SizedBox(width: 5),
+                            Text(
+                              device.statusLabel,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                color: device.statusColor,
+                              ),
+                            ),
+                          ],
                         ),
-                        if (device.versionLabel.isNotEmpty) ...[
-                          const SizedBox(width: 5),
+                        if (device.versionLabel.isNotEmpty)
                           Text(
-                            '· ${device.versionLabel}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            device.versionLabel,
                             style: const TextStyle(
                               fontSize: 11.5,
                               fontWeight: FontWeight.w600,
                               color: AppColors.textMuted,
                             ),
                           ),
-                        ],
                       ],
                     ),
+                    if (device.missingProtectionLabels.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        'Missing: ${device.missingProtectionLabels.join(', ')}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textMuted,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -972,137 +1218,6 @@ class _DeviceCard extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _DeviceTile extends StatelessWidget {
-  const _DeviceTile({
-    required this.device,
-    required this.selected,
-    required this.onTap,
-    this.onRename,
-    this.onRemove,
-  });
-
-  final Device device;
-  final bool selected;
-  final VoidCallback onTap;
-  final VoidCallback? onRename;
-  final VoidCallback? onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    final color = device.statusColor;
-    final hasMenu = onRename != null || onRemove != null;
-    // A circular chip like the family strip, sized so three fit across and the
-    // rest scroll sideways.
-    return SizedBox(
-      width: 96,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(AppRadius.md),
-            onTap: onTap,
-            onLongPress: onRemove,
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(2.5),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: selected
-                              ? AppColors.primary
-                              : Colors.transparent,
-                          width: 2.5,
-                        ),
-                      ),
-                      child: Container(
-                        width: 48,
-                        height: 48,
-                        alignment: Alignment.center,
-                        decoration: BoxDecoration(
-                          color: device.platformColor.withValues(alpha: 0.12),
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          device.icon,
-                          color: device.platformColor,
-                          size: 24,
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      right: 0,
-                      bottom: 2,
-                      child: Container(
-                        width: 14,
-                        height: 14,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Theme.of(context).scaffoldBackgroundColor,
-                            width: 2,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  device.label,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    height: 1.15,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                    color: selected
-                        ? AppColors.primary
-                        : AppColors.textSecondaryOf(context),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (hasMenu)
-            Positioned(
-              top: -4,
-              right: -6,
-              child: PopupMenuButton<String>(
-                tooltip: 'Device options',
-                position: PopupMenuPosition.under,
-                onSelected: (v) {
-                  if (v == 'rename') onRename?.call();
-                  if (v == 'remove') onRemove?.call();
-                },
-                itemBuilder: (_) => [
-                  if (onRename != null)
-                    const PopupMenuItem(value: 'rename', child: Text('Rename')),
-                  if (onRemove != null)
-                    const PopupMenuItem(value: 'remove', child: Text('Remove')),
-                ],
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  child: const Icon(
-                    Icons.more_vert_rounded,
-                    size: 18,
-                    color: AppColors.textMuted,
-                  ),
-                ),
-              ),
-            ),
-        ],
       ),
     );
   }

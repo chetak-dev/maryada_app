@@ -139,6 +139,10 @@ object DeviceLockdown {
             // can set the time back could skip bedtime. Forcing network time
             // removes that bypass (and stops manual date/time changes entirely).
             requireNetworkTime(ctx)
+            // OEM "phone manager" apps force-stop background services through
+            // the same path Settings uses, which is how the accessibility
+            // service kept dying on Vivo and Oppo.
+            AccessibilityGuard.pinAgainstForceStop(ctx)
             removeSecondaryUsers(ctx)
             disableIncognito(ctx)
             return "Protection ON — app can’t be uninstalled; factory reset, safe mode & app cloning disabled."
@@ -248,6 +252,7 @@ object DeviceLockdown {
         if (!dpm.isDeviceOwnerApp(ctx.packageName)) return "Not a Device Owner."
         try {
             dpm.setUninstallBlocked(admin, ctx.packageName, false)
+            AccessibilityGuard.pinAgainstForceStop(ctx, pinned = false)
             dpm.clearUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
             dpm.clearUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
             dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADD_USER)

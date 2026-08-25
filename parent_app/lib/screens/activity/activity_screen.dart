@@ -139,7 +139,9 @@ class _WebActivityView extends StatefulWidget {
 
 class _WebActivityViewState extends State<_WebActivityView> {
   _Filter _filter = _Filter.all;
-  int _days = 1;
+
+  /// Days back to show; 0 is every day the devices still hold.
+  int _days = 0;
 
   // Built once: re-creating it inside build() re-subscribes on every setState,
   // which flashes the loading spinner each time a filter is tapped.
@@ -152,6 +154,7 @@ class _WebActivityViewState extends State<_WebActivityView> {
 
   bool _inPeriod(DateTime? at) {
     if (at == null) return false;
+    if (_days == 0) return true;
     final now = DateTime.now();
     final start = DateTime(
       now.year,
@@ -161,13 +164,19 @@ class _WebActivityViewState extends State<_WebActivityView> {
     return !at.isBefore(start);
   }
 
+  static bool _isToday(DateTime? at) {
+    if (at == null) return false;
+    final now = DateTime.now();
+    return at.year == now.year && at.month == now.month && at.day == now.day;
+  }
+
   // Building and sorting the timeline is the expensive part, and it doesn't
   // depend on the filter — doing it inside build() made every filter tap
   // re-sort the whole history before the tile could highlight.
   WebHistory? _cachedFor;
   int? _cachedDays;
   late List<_Entry> _allEntries;
-  late Duration _totalTime;
+  late Duration _todayTime;
   late int _searchCount;
   late int _siteCount;
   late int _blockCount;
@@ -189,7 +198,11 @@ class _WebActivityViewState extends State<_WebActivityView> {
     _searchCount = searches.length;
     _siteCount = visited.length;
     _blockCount = blocked.fold<int>(0, (sum, b) => sum + b.count);
-    _totalTime = visited.fold(Duration.zero, (sum, v) => sum + v.timeSpent);
+    // The headline is always today, whatever period the list shows: a running
+    // month-long total answers no question a parent actually asks.
+    _todayTime = history.visited
+        .where((v) => _isToday(v.at))
+        .fold(Duration.zero, (sum, v) => sum + v.timeSpent);
 
     _allEntries =
         <_Entry>[
@@ -255,7 +268,7 @@ class _WebActivityViewState extends State<_WebActivityView> {
           ),
           children: [
             _SummaryCard(
-              total: _totalTime,
+              total: _todayTime,
               days: _days,
               onDays: (d) => setState(() => _days = d),
               searches: _searchCount,
@@ -331,6 +344,7 @@ class _SummaryCard extends StatelessWidget {
   final ValueChanged<_Filter> onFilter;
 
   static String _periodLabel(int d) => switch (d) {
+    0 => 'All history',
     1 => 'Today',
     7 => 'Last 7 days',
     _ => 'Last 30 days',
@@ -361,7 +375,7 @@ class _SummaryCard extends StatelessWidget {
             children: [
               const Expanded(
                 child: Text(
-                  'Time on the web',
+                  'Today on the web',
                   style: TextStyle(
                     color: Colors.white70,
                     fontSize: 13,
@@ -375,7 +389,7 @@ class _SummaryCard extends StatelessWidget {
                 onSelected: onDays,
                 position: PopupMenuPosition.under,
                 itemBuilder: (_) => [
-                  for (final d in [1, 7, 30])
+                  for (final d in [0, 1, 7, 30])
                     PopupMenuItem(value: d, child: Text(_periodLabel(d))),
                 ],
                 child: Container(

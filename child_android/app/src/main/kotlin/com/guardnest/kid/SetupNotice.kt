@@ -68,10 +68,15 @@ object SetupNotice {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val missing = Permissions.missingCount(ctx)
-        val text = if (missing == 1) {
-            "1 permission still needs your approval. Tap to finish setup."
-        } else {
-            "$missing permissions still need your approval. Tap to finish setup."
+        val text = when {
+            // The switch is still on, so "grant a permission" would send the
+            // child looking for something that already looks granted.
+            Permissions.accessibilityStalled(ctx) ->
+                "App blocking has stopped. Tap, then turn it off and on again."
+            missing == 1 ->
+                "1 permission still needs your approval. Tap to finish setup."
+            else ->
+                "$missing permissions still need your approval. Tap to finish setup."
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(ctx, channel)

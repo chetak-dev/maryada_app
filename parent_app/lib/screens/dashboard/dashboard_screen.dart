@@ -11,12 +11,15 @@ import '../../data/user_repository.dart';
 import '../../config.dart';
 import '../../models/app_user.dart';
 import '../../models/child.dart';
+import '../../models/device.dart';
 import '../../models/family.dart';
 import '../../models/screen_time_rule.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/access_scope.dart';
 import '../../widgets/brand_mark.dart';
+import '../../widgets/child_devices.dart';
 import '../../widgets/profile_button.dart';
+import '../../widgets/sync_button.dart';
 import '../../widgets/theme_toggle_button.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../child_detail/child_detail_screen.dart';
@@ -47,10 +50,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         titleSpacing: AppSpacing.md,
         title: const BrandLockup(markSize: 32),
-        actions: const [
-          ThemeToggleButton(),
-          ProfileButton(),
-          SizedBox(width: AppSpacing.xs)
+        actions: [
+          SyncButton(uid: _live ? uid : null),
+          const ThemeToggleButton(),
+          const ProfileButton(),
+          const SizedBox(width: AppSpacing.xs),
         ],
       ),
       // Scrollable only as a safety net: the sections are sized to fit one
@@ -152,9 +156,10 @@ class _GreetingHeader extends StatelessWidget {
                 Text(
                   'Made with ❤️ by ISKCON Brahmapur',
                   style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.72),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
+                    color: Colors.white.withValues(alpha: 0.92),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.2,
                   ),
                 ),
                 const SizedBox(height: AppSpacing.lg),
@@ -503,7 +508,7 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
     super.dispose();
   }
 
-  /// "See all" opens the Profiles page â€” which is also where profiles are
+  /// "See all" opens the Profiles page, which is also where profiles are
   /// created and devices paired, so it shows even while the family is empty.
   Widget _headerActions({VoidCallback? onSeeAll}) {
     if (onSeeAll == null) return const SizedBox.shrink();
@@ -804,12 +809,28 @@ class _AvatarChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ChildDevices(
+      familyId: familyId,
+      childId: child.id,
+      builder: (context, devices) => _build(context, devices),
+    );
+  }
+
+  Widget _build(BuildContext context, List<Device> devices) {
+    // The devices are the truth: they each stamp the profile document, so its
+    // own status is whichever of them reported last.
+    final worst = ProfileStatus.worst(devices);
     final status = child.effectiveStatus;
-    final online = status == ChildStatus.online;
-    final removed = status == ChildStatus.removed;
+    final removed = worst != null
+        ? worst.likelyRemoved || worst.removalUnlocked
+        : status == ChildStatus.removed;
+    final statusColor = worst?.statusColor ?? status.color;
+    final ok = worst != null
+        ? worst.severity == 0
+        : status == ChildStatus.online;
     // No device yet — no status: plain grey ring, no badge.
     final ringColor =
-        child.paired ? status.color : AppColors.borderOf(context);
+        child.paired ? statusColor : AppColors.borderOf(context);
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.md),
       onTap: () => Navigator.of(context).push(
@@ -824,64 +845,70 @@ class _AvatarChip extends StatelessWidget {
         width: 84,
         padding: const EdgeInsets.symmetric(horizontal: 4),
         child: Column(
-          // Top-aligned with a fixed name area: centring made a chip whose
-          // name wrapped to two lines sit higher than the rest, so the row of
-          // circles no longer lined up.
-          mainAxisAlignment: MainAxisAlignment.start,
+          // Both the avatar slot and the name area are fixed heights, so
+          // centring can't make a chip with a two-line name ride higher than
+          // the rest of the row.
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Stack(
-              clipBehavior: Clip.none,
-              children: [
-                // The ring is the status: green for protected, amber otherwise.
-                // A removed app fills the whole avatar red instead — it must
-                // not read as just another shade of "needs attention".
-                Container(
-                  padding: const EdgeInsets.all(2),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: ringColor, width: 2.5),
-                  ),
-                  child: CircleAvatar(
-                    radius: 21,
-                    backgroundColor:
-                        removed ? AppColors.danger : child.avatarColor,
-                    child: removed
-                        ? const Icon(Icons.gpp_bad_rounded,
-                            color: Colors.white, size: 22)
-                        : Text(
-                            child.initials,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 17,
-                            ),
-                          ),
-                  ),
-                ),
-                if (child.paired)
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Container(
-                      width: 14,
-                      height: 14,
-                      alignment: Alignment.center,
+            SizedBox(
+              height: 52,
+              child: Center(
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    // The ring is the status: green for protected, amber when
+                    // a permission is off or the device has gone quiet. A
+                    // removed app fills the whole avatar red instead — it must
+                    // not read as just another shade of "needs attention".
+                    Container(
+                      padding: const EdgeInsets.all(2),
                       decoration: BoxDecoration(
-                        color: status.color,
                         shape: BoxShape.circle,
-                        border: Border.all(
-                            color: AppColors.surfaceOf(context), width: 2),
+                        border: Border.all(color: ringColor, width: 2.5),
                       ),
-                      child: Icon(
-                        online
-                            ? Icons.check_rounded
-                            : Icons.priority_high_rounded,
-                        size: 9,
-                        color: Colors.white,
+                      child: CircleAvatar(
+                        radius: 21,
+                        backgroundColor:
+                            removed ? AppColors.danger : child.avatarColor,
+                        child: removed
+                            ? const Icon(Icons.gpp_bad_rounded,
+                                color: Colors.white, size: 22)
+                            : Text(
+                                child.initials,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 17,
+                                ),
+                              ),
                       ),
                     ),
-                  ),
-              ],
+                    if (child.paired)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          width: 14,
+                          height: 14,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: statusColor,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                                color: AppColors.surfaceOf(context), width: 2),
+                          ),
+                          child: Icon(
+                            ok
+                                ? Icons.check_rounded
+                                : Icons.priority_high_rounded,
+                            size: 9,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 5),
             SizedBox(
@@ -916,26 +943,34 @@ class _AddChip extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Container(
-              width: 48,
-              height: 48,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: AppColors.primaryLight,
-                shape: BoxShape.circle,
-                border: Border.all(
-                    color: AppColors.primary.withValues(alpha: 0.35)),
+            SizedBox(
+              height: 52,
+              child: Center(
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryLight,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.35)),
+                  ),
+                  child: const Icon(Icons.add_rounded,
+                      color: AppColors.primary, size: 24),
+                ),
               ),
-              child: const Icon(Icons.add_rounded,
-                  color: AppColors.primary, size: 24),
             ),
             const SizedBox(height: 5),
-            const Text(
-              'Add',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-                color: AppColors.primary,
+            const SizedBox(
+              height: 28,
+              child: Text(
+                'Add',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
               ),
             ),
           ],

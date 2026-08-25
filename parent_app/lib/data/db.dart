@@ -73,7 +73,20 @@ class Db {
     });
   }
 
-  /// Reads epoch-millis timestamps as written by the child device.
-  static DateTime? millis(Object? value) =>
-      value is num ? DateTime.fromMillisecondsSinceEpoch(value.toInt()) : null;
+  /// Reads epoch-millis timestamps as written by the child device. Server
+  /// timestamps arrive as a [Timestamp] instead, so both shapes are accepted.
+  static DateTime? millis(Object? value) => switch (value) {
+        final num n => DateTime.fromMillisecondsSinceEpoch(n.toInt()),
+        final Timestamp t => t.toDate(),
+        _ => null,
+      };
+
+  /// The local calendar day of [at], for keeping per-day history rows apart.
+  /// Records from devices that predate day bucketing carry one timestamp for a
+  /// whole run of activity, so they simply land on that day.
+  static int dayKey(DateTime? at) {
+    if (at == null) return 0;
+    final d = at.toLocal();
+    return d.year * 10000 + d.month * 100 + d.day;
+  }
 }

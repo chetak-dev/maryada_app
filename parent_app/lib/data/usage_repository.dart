@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import 'db.dart';
 
 /// One day's total screen time.
@@ -51,15 +53,38 @@ class UsageRepository {
         .doc(childId)
         .collection('usage')
         .get();
-    if (snap.docs.isEmpty) return null;
+    return _summarise(snap.docs, deviceId);
+  }
 
-    final perDevice = snap.docs.where((d) => d.id != 'summary').toList();
+  /// The same reading, kept up to date. Screen time changes all day, so a
+  /// figure fetched once when the screen opened was stale within minutes.
+  Stream<UsageSummary?> watch(
+    String familyId,
+    String childId, {
+    String? deviceId,
+  }) {
+    return Db.families
+        .doc(familyId)
+        .collection('children')
+        .doc(childId)
+        .collection('usage')
+        .snapshots()
+        .map((snap) => _summarise(snap.docs, deviceId));
+  }
+
+  UsageSummary? _summarise(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+    String? deviceId,
+  ) {
+    if (docs.isEmpty) return null;
+
+    final perDevice = docs.where((d) => d.id != 'summary').toList();
     final ownedIds = perDevice.map((d) => d.id).toSet();
     final sources = deviceId != null
-        ? snap.docs.where((d) => d.id == deviceId).toList()
+        ? docs.where((d) => d.id == deviceId).toList()
         : [
             ...perDevice,
-            ...snap.docs.where((d) =>
+            ...docs.where((d) =>
                 d.id == 'summary' &&
                 !ownedIds.contains((d.data()['deviceUid'] ?? '').toString())),
           ];

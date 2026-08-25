@@ -20,6 +20,16 @@ import java.util.Locale
  */
 object UsageReporter {
 
+    /** How far before a day starts to scan, so a session already running when
+     *  the day began is counted from midnight instead of being lost. */
+    private const val SESSION_LOOKBACK_MS = 8L * 60 * 60 * 1000
+
+    // Screen/keyguard event ids. Named constants only exist from API 28/29 and
+    // the values are part of the public UsageEvents contract.
+    private const val SCREEN_NON_INTERACTIVE = 16
+    private const val KEYGUARD_SHOWN = 17
+    private const val DEVICE_SHUTDOWN = 26
+
     /** One day's total foreground time. */
     data class DayUsage(val label: String, val minutes: Int)
 
@@ -121,6 +131,10 @@ object UsageReporter {
      * queryAndAggregateUsageStats, whose totalTimeInForeground over-reports
      * (background/service foreground time, stale sessions), which made apps the
      * child never opened show minutes.
+     *
+     * The screen turning off closes every open session. An app that is still in
+     * the foreground when the phone is locked never emits a background event, so
+     * a chat app left open overnight used to be reported as eight hours of use.
      */
     @Suppress("DEPRECATION")
     private fun foregroundMsByPackage(
@@ -129,29 +143,39 @@ object UsageReporter {
         if (endMs <= startMs) return emptyMap()
         val totals = HashMap<String, Long>()
         val resumedAt = HashMap<String, Long>()
+        // A session that began before midnight still counts towards this day, so
+        // the scan starts early and every session is clamped to the window.
         val events = try {
-            usm.queryEvents(startMs, endMs)
+            usm.queryEvents(startMs - SESSION_LOOKBACK_MS, endMs)
         } catch (_: Exception) {
             return emptyMap()
         }
+
+        fun close(pkg: String, at: Long) {
+            val from = resumedAt.remove(pkg) ?: return
+            val a = maxOf(from, startMs)
+            val b = minOf(at, endMs)
+            if (b > a) totals[pkg] = (totals[pkg] ?: 0L) + (b - a)
+        }
+
         val ev = UsageEvents.Event()
         while (events.hasNextEvent()) {
             events.getNextEvent(ev)
-            val pkg = ev.packageName ?: continue
             when (ev.eventType) {
-                UsageEvents.Event.MOVE_TO_FOREGROUND -> resumedAt[pkg] = ev.timeStamp
+                UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                    val pkg = ev.packageName ?: continue
+                    resumedAt[pkg] = ev.timeStamp
+                }
                 UsageEvents.Event.MOVE_TO_BACKGROUND -> {
-                    val from = resumedAt.remove(pkg) ?: continue
-                    if (ev.timeStamp > from) {
-                        totals[pkg] = (totals[pkg] ?: 0L) + (ev.timeStamp - from)
-                    }
+                    val pkg = ev.packageName ?: continue
+                    close(pkg, ev.timeStamp)
+                }
+                SCREEN_NON_INTERACTIVE, KEYGUARD_SHOWN, DEVICE_SHUTDOWN -> {
+                    for (pkg in resumedAt.keys.toList()) close(pkg, ev.timeStamp)
                 }
             }
         }
-        // Whatever is still in the foreground at the end of the window.
-        for ((pkg, from) in resumedAt) {
-            if (endMs > from) totals[pkg] = (totals[pkg] ?: 0L) + (endMs - from)
-        }
+        for (pkg in resumedAt.keys.toList()) close(pkg, endMs)
         return totals
     }
 

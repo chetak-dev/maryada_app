@@ -71,6 +71,7 @@ class GuardNestNotificationListener : NotificationListenerService() {
         super.onListenerConnected()
         instance = this
         YoutubeStore.init(this)
+        AppCallStore.init(this)
         val mgr = getSystemService(Context.MEDIA_SESSION_SERVICE) as? MediaSessionManager
         sessionManager = mgr
         try {
@@ -232,6 +233,82 @@ class GuardNestNotificationListener : NotificationListenerService() {
         YoutubeWatch.sessionBound = false
     }
 
+    // ---- WhatsApp calls ---------------------------------------------------
+
+    /** Contact per live call notification, so hanging up can be timed. */
+    private val liveCalls = HashMap<String, String>()
+
+    override fun onNotificationPosted(sbn: android.service.notification.StatusBarNotification?) {
+        try {
+            readCall(sbn ?: return)
+        } catch (_: Throwable) {
+        }
+    }
+
+    override fun onNotificationRemoved(sbn: android.service.notification.StatusBarNotification?) {
+        try {
+            val contact = liveCalls.remove(sbn?.key ?: return) ?: return
+            // The notification going away is the hang-up, so this is the only
+            // moment the real length of the call is known.
+            AppCallStore.finish("WhatsApp", contact, System.currentTimeMillis())
+        } catch (_: Throwable) {
+        }
+    }
+
+    /**
+     * Records a WhatsApp voice or video call from its notification.
+     *
+     * WhatsApp keeps calls in its own encrypted store, so they never appear in
+     * the system call log — this notification is the only trace of them the OS
+     * exposes. Only calls are read; every other notification is ignored.
+     *
+     * One call produces several notifications (ringing, then connected, then
+     * possibly missed), each with its own timestamp; [AppCallStore] folds them
+     * back into a single record.
+     */
+    private fun readCall(sbn: android.service.notification.StatusBarNotification) {
+        if (!Pkgs.isWhatsApp(sbn.packageName)) return
+        val n = sbn.notification ?: return
+        val extras = n.extras ?: return
+        val contact = extras.getCharSequence(android.app.Notification.EXTRA_TITLE)
+            ?.toString()?.trim().orEmpty()
+        if (contact.isEmpty()) return
+        val text = extras.getCharSequence(android.app.Notification.EXTRA_TEXT)
+            ?.toString()?.lowercase().orEmpty()
+        val isCall = n.category == android.app.Notification.CATEGORY_CALL ||
+            CALL_WORDS.any { text.contains(it) }
+        if (!isCall) return
+
+        val missed = text.contains("missed")
+        val incoming = missed || text.contains("incoming") || text.contains("ringing")
+        val outgoing = text.contains("calling") || text.contains("dialing")
+        // Only the ringing/dialling notification names the direction; the
+        // ongoing-call one usually just counts, and a guess there would flip a
+        // call that was already correctly filed.
+        val directionKnown = missed || incoming || outgoing
+        // A running timer means somebody picked up.
+        val connected = extras.getBoolean(
+            android.app.Notification.EXTRA_SHOW_CHRONOMETER, false
+        ) || n.`when` > 0L && text.contains("ongoing")
+        val startedAt = if (n.`when` in 1..System.currentTimeMillis()) {
+            n.`when`
+        } else {
+            sbn.postTime
+        }
+        AppCallStore.record(
+            app = "WhatsApp",
+            contact = contact,
+            video = text.contains("video"),
+            incoming = incoming,
+            missed = missed,
+            startedAt = startedAt,
+            connected = connected,
+            directionKnown = directionKnown,
+        )
+        // A missed-call notice is not a live call — nothing to time when it goes.
+        if (!missed) liveCalls[sbn.key] = contact
+    }
+
     companion object {
         /** The running instance, so Temporary Access can unbind it immediately. */
         @Volatile
@@ -251,5 +328,11 @@ class GuardNestNotificationListener : NotificationListenerService() {
 
         /** Cap a single tick's added time so a stalled pump can't over-count. */
         const val MAX_GAP_MS = 15_000L
+
+        /** Enough languages are in play that the category flag is the primary
+         *  signal; these only widen the net for ROMs that drop it. */
+        private val CALL_WORDS = listOf(
+            "voice call", "video call", "calling", "ongoing call", "missed call",
+        )
     }
 }

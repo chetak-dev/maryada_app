@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../../data/app_calls_repository.dart';
 import '../../data/chat_history_repository.dart';
 import '../../data/db.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/chat_bubble.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/whatsapp_mark.dart';
 
 /// Shows chats captured from messaging apps (WhatsApp) on the child device,
 /// as a WhatsApp-style contact list. Tapping a contact opens the full
@@ -16,6 +18,7 @@ class ChatHistoryScreen extends StatefulWidget {
     this.familyId,
     this.childId,
     this.deviceId,
+    this.platform,
   });
 
   final String childName;
@@ -24,6 +27,7 @@ class ChatHistoryScreen extends StatefulWidget {
 
   /// When set, only this device's chats are shown.
   final String? deviceId;
+  final String? platform;
 
   @override
   State<ChatHistoryScreen> createState() => _ChatHistoryScreenState();
@@ -45,84 +49,332 @@ class _ChatHistoryScreenState extends State<ChatHistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Scaffold(
-      backgroundColor: ChatColors.listBgOf(isDark),
-      appBar: AppBar(
+    return DefaultTabController(
+      length: 2,
+      child: Scaffold(
         backgroundColor: ChatColors.listBgOf(isDark),
-        foregroundColor: ChatColors.headerTextOf(isDark),
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        title: Text(
-          'Chats · ${widget.childName}',
-          style: TextStyle(
-            color: ChatColors.headerTextOf(isDark),
-            fontSize: 22,
-            fontWeight: FontWeight.w700,
+        appBar: AppBar(
+          backgroundColor: ChatColors.listBgOf(isDark),
+          foregroundColor: ChatColors.headerTextOf(isDark),
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          title: Text(
+            'WhatsApp · ${widget.childName}',
+            style: TextStyle(
+              color: ChatColors.headerTextOf(isDark),
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          bottom: TabBar(
+            labelColor: ChatColors.headerTextOf(isDark),
+            unselectedLabelColor:
+                ChatColors.headerTextOf(isDark).withValues(alpha: 0.6),
+            indicatorColor: ChatColors.headerTextOf(isDark),
+            labelStyle: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.4,
+            ),
+            tabs: const [Tab(text: 'CHATS'), Tab(text: 'CALLS')],
+          ),
+        ),
+        body: !_live
+            ? const EmptyState(
+                icon: Icons.forum_rounded,
+                title: 'No device connected',
+                message: 'Connect a device to see chats and calls.',
+              )
+            : TabBarView(
+                children: [
+                  _chatsTab(),
+                  _CallsTab(
+                    familyId: widget.familyId!,
+                    childId: widget.childId!,
+                    deviceId: widget.deviceId,
+                    platform: widget.platform,
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _chatsTab() {
+    return Column(
+      children: [
+        _SearchBox(
+          controller: _searchCtrl,
+          onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+        ),
+        Expanded(
+          child: StreamBuilder<List<ChatSummary>>(
+            stream: ChatHistoryRepository.instance.watchChats(
+              widget.familyId!,
+              widget.childId!,
+              deviceId: widget.deviceId,
+            ),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              if (snap.hasError) {
+                return const EmptyState(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Couldn’t load chats',
+                  message: 'Check your connection and try again.',
+                );
+              }
+              var chats = snap.data ?? const <ChatSummary>[];
+              if (chats.isEmpty) {
+                return const EmptyState(
+                  icon: Icons.forum_rounded,
+                  title: 'No chats captured yet',
+                  message: 'New incoming messages appear here.',
+                );
+              }
+              if (_query.isNotEmpty) {
+                chats = chats
+                    .where((c) => c.sender.toLowerCase().contains(_query))
+                    .toList();
+              }
+              if (chats.isEmpty) {
+                return const EmptyState(
+                  icon: Icons.search_off_rounded,
+                  title: 'No chats match your search',
+                );
+              }
+              return ListView.builder(
+                padding: const EdgeInsets.only(bottom: AppSpacing.xxl),
+                itemCount: chats.length,
+                itemBuilder: (_, i) => _ChatListTile(
+                  chat: chats[i],
+                  familyId: widget.familyId!,
+                  childId: widget.childId!,
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// WhatsApp voice and video calls. They never reach the phone's call log, so
+/// the child device reads them from WhatsApp's own ongoing-call notification.
+class _CallsTab extends StatefulWidget {
+  const _CallsTab({
+    required this.familyId,
+    required this.childId,
+    this.deviceId,
+    this.platform,
+  });
+
+  final String familyId;
+  final String childId;
+  final String? deviceId;
+  final String? platform;
+
+  @override
+  State<_CallsTab> createState() => _CallsTabState();
+}
+
+class _CallsTabState extends State<_CallsTab> {
+  late final Stream<List<AppCall>> _stream = AppCallsRepository.instance.watch(
+    widget.familyId,
+    widget.childId,
+    deviceId: widget.deviceId,
+    platform: widget.platform,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<AppCall>>(
+      stream: _stream,
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snap.hasError) {
+          return const EmptyState(
+            icon: Icons.cloud_off_rounded,
+            title: 'Couldn’t load calls',
+            message: 'Check your connection and try again.',
+          );
+        }
+        final calls = snap.data ?? const <AppCall>[];
+        if (calls.isEmpty) {
+          return const EmptyState(
+            icon: Icons.call_rounded,
+            title: 'No calls captured yet',
+            message: 'WhatsApp voice and video calls appear here.',
+          );
+        }
+        return ListView.builder(
+          padding: const EdgeInsets.only(bottom: AppSpacing.xxl),
+          itemCount: calls.length,
+          itemBuilder: (_, i) => _CallTile(call: calls[i]),
+        );
+      },
+    );
+  }
+}
+
+class _CallTile extends StatelessWidget {
+  const _CallTile({required this.call});
+  final AppCall call;
+
+  static String _length(Duration d) {
+    if (d.inSeconds <= 0) return '';
+    final h = d.inHours;
+    final m = d.inMinutes % 60;
+    final s = d.inSeconds % 60;
+    if (h > 0) return '${h}h ${m}m';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
+  }
+
+  static String _clock(DateTime at) {
+    final h = at.hour % 12 == 0 ? 12 : at.hour % 12;
+    final m = at.minute.toString().padLeft(2, '0');
+    return '$h:$m ${at.hour < 12 ? 'am' : 'pm'}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final missed = call.missed;
+    final color = missed
+        ? AppColors.danger
+        : (call.incoming ? AppColors.success : AppColors.info);
+    // A missed call gets the bent arrow, pointing the way the call was going.
+    final icon = missed
+        ? (call.incoming
+              ? Icons.call_missed_rounded
+              : Icons.call_missed_outgoing_rounded)
+        : (call.incoming
+              ? Icons.call_received_rounded
+              : Icons.call_made_rounded);
+    final length = _length(call.duration);
+    final at = call.at;
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: 4,
+      ),
+      leading: CircleAvatar(
+        radius: 24,
+        backgroundColor: WhatsAppMark.brandGreen.withValues(alpha: 0.15),
+        child: Text(
+          call.contact.trim().isEmpty
+              ? '?'
+              : call.contact.trim()[0].toUpperCase(),
+          style: const TextStyle(
+            color: WhatsAppMark.brandGreen,
+            fontWeight: FontWeight.w800,
+            fontSize: 18,
           ),
         ),
       ),
-      body: Column(
-        children: [
-          _SearchBox(
-            controller: _searchCtrl,
-            onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
-          ),
-          Expanded(
-            child: !_live
-                ? const EmptyState(
-                    icon: Icons.forum_rounded,
-                    title: 'No device connected',
-                    message: 'Connect a device to see chat messages.',
-                  )
-                : StreamBuilder<List<ChatSummary>>(
-                    stream: ChatHistoryRepository.instance
-                        .watchChats(widget.familyId!, widget.childId!,
-            deviceId: widget.deviceId),
-                    builder: (context, snap) {
-                      if (snap.connectionState == ConnectionState.waiting) {
-                        return const Center(
-                            child: CircularProgressIndicator());
-                      }
-                      if (snap.hasError) {
-                        return const EmptyState(
-                          icon: Icons.cloud_off_rounded,
-                          title: 'Couldn’t load chats',
-                          message:
-                              'Check your connection and try again.',
-                        );
-                      }
-                      var chats = snap.data ?? const <ChatSummary>[];
-                      if (chats.isEmpty) {
-                        return const EmptyState(
-                          icon: Icons.forum_rounded,
-                          title: 'No chats captured yet',
-                          message:
-                              'New incoming messages appear here.',
-                        );
-                      }
-                      if (_query.isNotEmpty) {
-                        chats = chats
-                            .where((c) =>
-                                c.sender.toLowerCase().contains(_query))
-                            .toList();
-                      }
-                      if (chats.isEmpty) {
-                        return const EmptyState(
-                          icon: Icons.search_off_rounded,
-                          title: 'No chats match your search',
-                        );
-                      }
-                      return ListView.builder(
-                        padding: const EdgeInsets.only(bottom: AppSpacing.xxl),
-                        itemCount: chats.length,
-                        itemBuilder: (_, i) => _ChatListTile(
-                          chat: chats[i],
-                          familyId: widget.familyId!,
-                          childId: widget.childId!,
-                        ),
-                      );
-                    },
+      title: Text(
+        call.contact,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
+          color: missed ? AppColors.danger : AppColors.textPrimaryOf(context),
+        ),
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: color),
+            const SizedBox(width: 5),
+            Text(
+              missed
+                  ? 'Missed'
+                  : (call.incoming ? 'Incoming' : 'Outgoing'),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+            // A missed call has no duration, so nothing is shown rather than 0s.
+            if (length.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Text(
+                '· $length',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: AppColors.textSecondaryOf(context),
+                ),
+              ),
+            ],
+            const SizedBox(width: 8),
+            _CallKindChip(video: call.video),
+          ],
+        ),
+      ),
+      trailing: at == null
+          ? null
+          : Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  dayLabel(at),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textMuted,
                   ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _clock(at),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textMuted,
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+/// Whether it was a voice or a video call — WhatsApp treats them as one feed,
+/// but a parent is asking about two different things.
+class _CallKindChip extends StatelessWidget {
+  const _CallKindChip({required this.video});
+  final bool video;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: WhatsAppMark.brandGreen.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            video ? Icons.videocam_rounded : Icons.call_rounded,
+            size: 12,
+            color: WhatsAppMark.brandGreen,
+          ),
+          const SizedBox(width: 3),
+          Text(
+            video ? 'Video' : 'Voice',
+            style: const TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w700,
+              color: WhatsAppMark.brandGreen,
+            ),
           ),
         ],
       ),

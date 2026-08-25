@@ -21,6 +21,7 @@ class AppRulesScreen extends StatefulWidget {
     this.familyId,
     this.childId,
     this.deviceId,
+    this.deviceLabel,
     this.platform,
   });
 
@@ -28,6 +29,10 @@ class AppRulesScreen extends StatefulWidget {
   final String? familyId;
   final String? childId;
   final String? deviceId;
+
+  /// The device this list belongs to, shown so a parent can tell at a glance
+  /// that they are looking at the PC's apps and not the phone's.
+  final String? deviceLabel;
   final String? platform;
 
   @override
@@ -151,6 +156,7 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
     final blocked = _apps.where((a) => a.effectivelyBlocked).length;
     final banking = _apps.where((a) => a.effectivelyBanking).length;
     final list = _filtered;
+    final device = widget.deviceLabel;
     return Scaffold(
       appBar: AppBar(title: Text(title)),
       body: Column(
@@ -164,6 +170,37 @@ class _AppRulesScreenState extends State<AppRulesScreen> {
                 0,
               ),
               child: ReadOnlyBanner(),
+            ),
+          if (device != null && device.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                AppSpacing.sm,
+                AppSpacing.md,
+                0,
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.devices_rounded,
+                    size: 14,
+                    color: AppColors.textMuted,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Apps installed on $device',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textSecondaryOf(context),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           Padding(
             padding: const EdgeInsets.fromLTRB(

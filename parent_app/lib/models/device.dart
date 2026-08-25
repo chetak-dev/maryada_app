@@ -39,6 +39,12 @@ class Device {
   /// hiding a feed those devices do fill would lose real data.
   final Map<String, bool> capabilities;
 
+  /// The last failure this device reported. Held per device: a profile-level
+  /// copy is overwritten by whichever device happens to report last, so one
+  /// machine's old problem used to show against a phone that was perfectly fine.
+  final String? lastError;
+  final DateTime? lastErrorAt;
+
   const Device({
     required this.id,
     required this.deviceModel,
@@ -54,6 +60,8 @@ class Device {
     this.adminChangedAt,
     this.protections = const {},
     this.capabilities = const {},
+    this.lastError,
+    this.lastErrorAt,
   });
 
   /// True unless this device says otherwise.
@@ -72,13 +80,35 @@ class Device {
 
   bool get isOnline => online && !isStale;
 
-  /// Long enough without a heartbeat that the app is no longer running at all
-  /// — uninstalled, force-stopped or the phone is off. The device reports
-  /// every couple of minutes, so an hour of silence is well past normal doze.
+  /// Long enough without a heartbeat that the app is no longer running at all.
+  /// A phone is carried all day, so an hour of quiet is already odd; a PC is
+  /// switched off every night, and calling that "not reporting" cried wolf.
   bool get isSilent {
     final at = lastSeenAt;
     if (at == null) return true;
-    return DateTime.now().difference(at) > const Duration(hours: 1);
+    return DateTime.now().difference(at) > silenceWindow;
+  }
+
+  Duration get silenceWindow => platform == 'android'
+      ? const Duration(hours: 1)
+      : const Duration(hours: 12);
+
+  /// A failure worth showing: recent, and not the known migration noise from
+  /// devices predating the hardened rules.
+  bool get hasRecentError {
+    final at = lastErrorAt;
+    final error = lastError;
+    if (error == null || error.isEmpty || at == null) return false;
+    final normalized = error.toLowerCase();
+    if (normalized.startsWith('ensuredeviceregistered:') &&
+        normalized.contains('permission_denied')) {
+      return false;
+    }
+    // A heartbeat after the failure proves the device recovered, whether or not
+    // it managed to clear the field itself.
+    final seen = lastSeenAt;
+    if (seen != null && seen.isAfter(at)) return false;
+    return DateTime.now().difference(at) < const Duration(hours: 24);
   }
 
   /// The app can be removed: its device admin was switched off.
@@ -90,6 +120,26 @@ class Device {
 
   List<String> get offProtections =>
       protections.entries.where((e) => !e.value).map((e) => e.key).toList();
+
+  /// The missing protections in words a parent can act on. "Permission
+  /// missing" alone left them opening every screen to find out which.
+  List<String> get missingProtectionLabels => [
+        for (final key in offProtections) _protectionLabels[key] ?? key,
+      ];
+
+  static const _protectionLabels = <String, String>{
+    'accessibility': 'App blocking',
+    'monitoring': 'Monitoring service (turn App blocking off and on)',
+    'notificationAccess': 'Notification access',
+    'usageAccess': 'Usage access',
+    'callLog': 'Call log',
+    'sms': 'Messages',
+    'battery': 'Battery exemption',
+    'deviceAdmin': 'Device admin',
+    'overlay': 'Display over other apps',
+    'service': 'Background service',
+    'startup': 'Start with Windows',
+  };
 
   /// Every required permission granted. The protections map is authoritative
   /// when present; `permissionsOk` is stamped true at pairing.
@@ -115,20 +165,33 @@ class Device {
       };
 
   Color get statusColor {
-    if (removalUnlocked || isSilent) return AppColors.danger;
-    return allProtectionsOk ? AppColors.success : AppColors.warning;
+    if (removalUnlocked) return AppColors.danger;
+    if (!allProtectionsOk) return AppColors.warning;
+    if (isSilent) return AppColors.warning;
+    return AppColors.success;
   }
 
   /// Permissions decide this, not the heartbeat: a device whose background
   /// service was killed is still protected, and saying "Offline" whenever the
   /// child had the app closed told the parent nothing they could act on.
-  /// Removal and prolonged silence are the exceptions — both are things the
-  /// parent must act on, and both used to hide behind the permission state.
+  /// A missing permission outranks silence — it is the thing the parent can
+  /// actually go and fix, and hiding it behind "Not reporting" made two devices
+  /// in the very same state read as two different problems.
   String get statusLabel {
     if (likelyRemoved) return 'App removed${_removedOn()}';
     if (removalUnlocked) return 'Protection turned off${_removedOn()}';
+    if (!allProtectionsOk) return 'Permission missing';
     if (isSilent) return 'Not reporting';
-    return allProtectionsOk ? 'Protected' : 'Permission missing';
+    return 'Protected';
+  }
+
+  /// Ranks devices by how badly a profile needs attention, so a profile with
+  /// several devices can show the worst one rather than the last to report.
+  int get severity {
+    if (likelyRemoved || removalUnlocked) return 3;
+    if (!allProtectionsOk) return 2;
+    if (isSilent) return 1;
+    return 0;
   }
 
   /// " · 12 Aug" — the day protection was switched off, when it is known.
@@ -177,6 +240,8 @@ class Device {
         if (rawCaps is Map)
           for (final e in rawCaps.entries) e.key.toString(): e.value == true,
       },
+      lastError: m['lastError'] as String?,
+      lastErrorAt: (m['lastErrorAt'] as Timestamp?)?.toDate(),
     );
   }
 }
@@ -196,4 +261,26 @@ class DeviceFeature {
   /// set rather than an empty screen.
   static bool supportedBy(Iterable<Device> devices, String feature) =>
       devices.isEmpty || devices.any((d) => d.supports(feature));
+}
+
+/// The single status a profile shows when it holds more than one device.
+///
+/// Every device writes its own state, but they all also stamp the profile
+/// document, so the last one to report used to decide what the parent saw — a
+/// laptop with a permission off could be hidden behind a healthy phone.
+class ProfileStatus {
+  /// The device a parent should be told about first, or null when there is none.
+  static Device? worst(Iterable<Device> devices) {
+    Device? worst;
+    for (final d in devices) {
+      if (worst == null || d.severity > worst.severity) worst = d;
+    }
+    return worst;
+  }
+
+  /// The first device with something the parent can act on.
+  static Device? faulty(Iterable<Device> devices) {
+    final w = worst(devices);
+    return (w != null && w.severity > 0) ? w : null;
+  }
 }

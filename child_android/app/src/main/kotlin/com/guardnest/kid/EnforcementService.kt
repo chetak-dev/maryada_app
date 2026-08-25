@@ -73,6 +73,7 @@ class EnforcementService : Service() {
             // kill the loop (which would make the parent show the child offline).
             try {
                 Pairing.ensureDeviceRegistered(this@EnforcementService)
+                guardAccessibility()
                 heartbeat()
                 enforce()
                 reportLocation()
@@ -82,6 +83,7 @@ class EnforcementService : Service() {
                 reportSmsHistory()
                 reportMessages()
                 reportYoutubeHistory()
+                reportAppCalls()
                 restoreTempAccessIfRecovered(this@EnforcementService)
                 TempAccessNotice.sync(this@EnforcementService)
                 SetupNotice.sync(this@EnforcementService)
@@ -103,6 +105,7 @@ class EnforcementService : Service() {
         YoutubeStore.init(this)
         WebHistoryStore.init(this)
         MessageStore.init(this)
+        AppCallStore.init(this)
         // Devices paired by an older build have no `devices/{uid}` record, which
         // the security rules now require before this device may read the
         // family's rules. Register before attaching the listeners.
@@ -229,11 +232,49 @@ class EnforcementService : Service() {
                         MessageStore.resetForClear()
                         WebHistoryStore.clearAll()
                         YoutubeStore.clearAll()
+                        AppCallStore.clearAll()
                         android.util.Log.i(
                             "Maryada", "history wipe honoured ($clearedAt)")
                     }
+                    // The parent tapped Sync. Nothing can wake a device that is
+                    // asleep, but one that is reachable should report now
+                    // instead of at the end of its next throttle window.
+                    val syncAt =
+                        snap?.getTimestamp("syncRequestedAt")?.toDate()?.time ?: 0L
+                    if (syncAt > 0L && syncAt != ChildStore.syncRequestedAt(this)) {
+                        ChildStore.setSyncRequestedAt(this, syncAt)
+                        reportEverythingNow()
+                    }
                 }
         )
+    }
+
+    /** Drops every reporting throttle so the next tick sends a full update. */
+    private fun reportEverythingNow() {
+        lastHeartbeat = 0L
+        lastUsageReport = 0L
+        lastWebHistoryReport = 0L
+        lastCallReport = 0L
+        lastSmsReport = 0L
+        lastMessagesReport = 0L
+        lastYoutubeReport = 0L
+        lastAppCallReport = 0L
+        lastLocationReport = 0L
+        handler.post {
+            try {
+                heartbeat()
+                reportUsage()
+                reportInstalledApps()
+                reportWebHistory()
+                reportCallHistory()
+                reportSmsHistory()
+                reportMessages()
+                reportYoutubeHistory()
+                reportAppCalls()
+            } catch (t: Throwable) {
+                Diag.warn(this, "syncNow", t)
+            }
+        }
     }
 
     /** Watches this installation's device record for a parent revocation. */
@@ -411,6 +452,13 @@ class EnforcementService : Service() {
     /** Live grant state of each required protection (true == granted). */
     private fun protectionsMap(): Map<String, Boolean> = mapOf(
         "accessibility" to Permissions.hasAccessibility(this),
+        // Granted but not running. Vivo/Oppo/Xiaomi kill the accessibility
+        // service without clearing its switch, so monitoring is dead while the
+        // parent's screen still says "Protected". Only reported once the repair
+        // attempts have had their grace period — a kill that heals in seconds
+        // is not something to put in front of a parent.
+        "monitoring" to Permissions.accessibilityOk(this),
+        "notificationAccess" to Permissions.hasNotificationAccess(this),
         "usageAccess" to Permissions.hasUsageAccess(this),
         "callLog" to Permissions.hasCallLog(this),
         "sms" to Permissions.hasSms(this),
@@ -418,6 +466,24 @@ class EnforcementService : Service() {
         "deviceAdmin" to Permissions.hasDeviceAdmin(this),
         "overlay" to Permissions.hasOverlay(this),
     )
+
+    /**
+     * Puts a killed accessibility service back. The stall clock itself is kept
+     * by [Permissions.accessibilityOk], which every enforcement path already
+     * consults; this is only the repair attempt.
+     */
+    private fun guardAccessibility() {
+        if (!ChildStore.isPaired(this)) return
+        if (!Permissions.hasAccessibility(this)) return
+        if (Permissions.accessibilityBound()) return
+        if (ChildStore.tempAccess(this)) return
+        // Silent repair when the install was granted WRITE_SECURE_SETTINGS at
+        // provisioning; otherwise the grace period runs out and the lockbox
+        // makes the child fix it.
+        if (AccessibilityGuard.recover(this)) {
+            Permissions.invalidateCache()
+        }
+    }
 
     /** The installed app's versionCode (reported to the parent via heartbeat). */
     private fun appVersionCode(): Long = try {
@@ -439,11 +505,6 @@ class EnforcementService : Service() {
         protectionsMap().filterValues { !it }.keys.toList()
 
     private var lastLocationReport = 0L
-    private var lastLocationHistory = 0L
-    // Last place written to the history trail, so we only append a new point
-    // when the child has actually moved to a different location.
-    @Volatile private var lastHistoryLat: Double? = null
-    @Volatile private var lastHistoryLng: Double? = null
     private var lastUpdateCheck = 0L
 
     /** Periodically checks for a remotely-published app update (OTA). */
@@ -541,10 +602,10 @@ class EnforcementService : Service() {
             // (so staying put doesn't fill the trail with duplicates), and at
             // most once every 30 minutes so it stays a coarse timeline.
             val now = System.currentTimeMillis()
-            if (now - lastLocationHistory >= LOCATION_HISTORY_MS && isNewPlace(lat, lng)) {
-                lastLocationHistory = now
-                lastHistoryLat = lat
-                lastHistoryLng = lng
+            val last = ChildStore.lastTrailPoint(this)
+            val dueForCheck = last == null || now - last.third >= LOCATION_HISTORY_MS
+            if (dueForCheck && isNewPlace(last, lat, lng, loc.accuracy)) {
+                ChildStore.setLastTrailPoint(this, lat, lng, now)
                 val point = hashMapOf<String, Any>(
                     "lat" to lat,
                     "lng" to lng,
@@ -560,14 +621,23 @@ class EnforcementService : Service() {
     /**
      * True if this fix is far enough from the last recorded history point to be
      * a distinct place (or if nothing has been recorded yet). Filters out GPS
-     * jitter and "sitting still" so only unique locations are kept.
+     * jitter and "sitting still" so only unique locations are kept. [last] is
+     * read from disk — the OS restarts this service often enough that an
+     * in-memory copy re-recorded the same place several times a day.
      */
-    private fun isNewPlace(lat: Double, lng: Double): Boolean {
-        val pLat = lastHistoryLat ?: return true
-        val pLng = lastHistoryLng ?: return true
+    private fun isNewPlace(
+        last: Triple<Double, Double, Long>?,
+        lat: Double,
+        lng: Double,
+        accuracy: Float,
+    ): Boolean {
+        if (last == null) return true
         val results = FloatArray(1)
-        Location.distanceBetween(pLat, pLng, lat, lng, results)
-        return results[0] > HISTORY_MIN_DISTANCE_M
+        Location.distanceBetween(last.first, last.second, lat, lng, results)
+        // A network fix can be a kilometre wide, so a "move" smaller than the
+        // fix's own error is the same place seen twice.
+        val threshold = maxOf(HISTORY_MIN_DISTANCE_M, accuracy)
+        return results[0] > threshold
     }
 
     /** Turns coordinates into a short human-readable place name (best effort). */
@@ -617,13 +687,18 @@ class EnforcementService : Service() {
         if (now - lastUsageReport < USAGE_MS) return
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
         val summary = UsageReporter.build(this) ?: return
         lastUsageReport = now
 
-        FirebaseFirestore.getInstance()
+        val usage = FirebaseFirestore.getInstance()
             .collection("families").document(familyId)
             .collection("children").document(childId)
-            .collection("usage").document("summary")
+            .collection("usage")
+        // One document per device, matching every other feed. The shared
+        // `summary` document meant a PC on the same profile erased the phone's
+        // screen time each time it reported.
+        usage.document(uid)
             .set(
                 mapOf(
                     "week" to summary.week.map {
@@ -636,10 +711,13 @@ class EnforcementService : Service() {
                             "minutes" to it.minutes,
                         )
                     },
+                    "platform" to "android",
+                    "deviceUid" to uid,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 ),
                 SetOptions.merge()
             )
+            .addOnSuccessListener { usage.document("summary").delete() }
     }
 
     private var lastWebHistoryReport = 0L
@@ -1242,31 +1320,66 @@ class EnforcementService : Service() {
             )
     }
 
+    private var lastAppCallReport = 0L
+
     /**
-     * Reports the device's launchable apps to the parent (once per service
-     * start), so the family's App Rules screen lists the real installed apps.
-     * Writes to children/{cid}/reports/installedApps — the child device is
-     * allowed to write its own subtree by the security rules.
+     * Reports WhatsApp voice and video calls. They never reach the system call
+     * log, so the parent's call history was blind to them; these come from the
+     * ongoing-call notification instead.
      */
-    private fun reportInstalledApps() {
+    private fun reportAppCalls() {
+        val now = System.currentTimeMillis()
+        if (now - lastAppCallReport < APP_CALLS_MS) return
+        if (!AppCallStore.hasChanges()) return
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
-        val apps = AppBlocker.launchableApps(this).map {
-            mapOf("packageName" to it.packageName, "appName" to it.label)
-        }
-        if (apps.isEmpty()) return
-        FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .collection("reports").document("installedApps")
+        val payload = AppCallStore.snapshot()
+        if (payload.isEmpty()) return
+        lastAppCallReport = now
+        reportDoc(familyId, childId, "appCalls")
             .set(
                 mapOf(
-                    "apps" to apps,
-                    "count" to apps.size,
+                    "calls" to payload,
+                    "count" to payload.size,
                     "updatedAt" to FieldValue.serverTimestamp(),
                 ),
                 SetOptions.merge()
             )
+    }
+
+    /**
+     * Reports the device's launchable apps to the parent (once per service
+     * start), so the family's App Rules screen lists the real installed apps.
+     * Written to children/{cid}/reports/installedApps-{uid}: a phone and a PC
+     * on one profile hold different apps, and a shared document meant whoever
+     * reported last decided which app list the parent saw.
+     */
+    private fun reportInstalledApps() {
+        val familyId = ChildStore.familyId(this) ?: return
+        val childId = ChildStore.childId(this) ?: return
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+        val apps = AppBlocker.launchableApps(this).map {
+            mapOf("packageName" to it.packageName, "appName" to it.label)
+        }
+        if (apps.isEmpty()) return
+        val reports = FirebaseFirestore.getInstance()
+            .collection("families").document(familyId)
+            .collection("children").document(childId)
+            .collection("reports")
+        reports.document("installedApps-$uid")
+            .set(
+                mapOf(
+                    "apps" to apps,
+                    "count" to apps.size,
+                    "platform" to "android",
+                    "deviceUid" to uid,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+                SetOptions.merge()
+            )
+            // The shared document this device used to write would otherwise
+            // keep showing its apps against every other device on the profile.
+            .addOnSuccessListener { reports.document("installedApps").delete() }
     }
 
     /**
@@ -1528,11 +1641,12 @@ class EnforcementService : Service() {
         /** Activity feeds stored as one array document per device. */
         private val REPORT_FEEDS = listOf(
             "webHistory", "callHistory", "smsHistory", "youtubeHistory",
+            "appCalls",
         )
         private const val FOREGROUND_FRESH_MS = 10_000L
         private const val FOREGROUND_QUERY_MS = 1_500L
         private const val HEARTBEAT_MS = 120_000L
-        private const val USAGE_MS = 300_000L
+        private const val USAGE_MS = 120_000L
         private const val LOCATION_MS = 120_000L
         private const val LOCATION_HISTORY_MS = 1_800_000L
         // Minimum distance (metres) from the last history point to count as a
@@ -1544,6 +1658,7 @@ class EnforcementService : Service() {
         private const val SMS_MS = 120_000L
         private const val MESSAGES_MS = 30_000L
         private const val YOUTUBE_MS = 30_000L
+        private const val APP_CALLS_MS = 60_000L
         private const val UPDATE_CHECK_MS = 3 * 60 * 60 * 1000L // 3 hours
         /** Tolerance before a chat time is treated as belonging to yesterday. */
         private const val FUTURE_SLACK_MS = 5 * 60 * 1000L

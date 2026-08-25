@@ -136,7 +136,8 @@ class WebHistoryRepository {
     for (final visit in source) {
       final domain = _normaliseDomain(visit.domain);
       if (domain.isEmpty) continue;
-      final key = '${visit.reason.toLowerCase()}\u0000$domain';
+      final key =
+          '${visit.reason.toLowerCase()}\u0000$domain\u0000${Db.dayKey(visit.at)}';
       final old = merged[key];
       if (old == null) {
         merged[key] = WebVisit(

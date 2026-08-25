@@ -26,6 +26,13 @@
     <uses-permission android:name="android.permission.READ_SMS" />
     <!-- Install the OTA self-update APK (silent on Device Owner). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Lets the app put its own accessibility service back when an OEM power
+         manager kills it. Development-level, so it is granted once at
+         provisioning with:
+         adb shell pm grant com.guardnest.kid android.permission.WRITE_SECURE_SETTINGS
+         Everything still works without it, just without the silent repair. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:allowBackup="false"

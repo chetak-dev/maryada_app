@@ -58,13 +58,33 @@ object AppUpdater {
         }
     }
 
+    /** What a manual "check for update" ended up doing. */
+    enum class CheckResult { UP_TO_DATE, DOWNLOADING, BUSY, FAILED }
+
     /**
      * Reads the update manifest and, if a newer build is published, downloads
      * and installs it on a background thread. Safe to call repeatedly; ignores
      * overlapping calls.
      */
-    fun checkAndUpdate(ctx: Context) {
-        if (checking) return
+    fun checkAndUpdate(ctx: Context) = checkAndUpdate(ctx, null)
+
+    /**
+     * As [checkAndUpdate], but reports back on the main thread so a parent who
+     * asked for the check is told whether anything is happening. Waiting up to
+     * three hours for the background check to notice a published build was the
+     * only way to take an update before.
+     */
+    fun checkAndUpdate(ctx: Context, onResult: ((CheckResult) -> Unit)?) {
+        val report: (CheckResult) -> Unit = { result ->
+            if (onResult != null) {
+                android.os.Handler(android.os.Looper.getMainLooper())
+                    .post { onResult(result) }
+            }
+        }
+        if (checking) {
+            report(CheckResult.BUSY)
+            return
+        }
         checking = true
         FirebaseFirestore.getInstance()
             .collection("appConfig").document("kid")
@@ -75,14 +95,17 @@ object AppUpdater {
                         doc.getBoolean("enabled") == false
                     ) {
                         checking = false
+                        report(CheckResult.UP_TO_DATE)
                         return@addOnSuccessListener
                     }
                     val latest = (doc.get("versionCode") as? Number)?.toLong() ?: 0L
                     val url = (doc.getString("url"))?.takeIf { it.startsWith("https://") }
                     if (url == null || latest <= currentVersion(ctx)) {
                         checking = false
+                        report(CheckResult.UP_TO_DATE)
                         return@addOnSuccessListener
                     }
+                    report(CheckResult.DOWNLOADING)
                     Thread {
                         try {
                             downloadAndInstall(ctx, url)
@@ -93,9 +116,13 @@ object AppUpdater {
                     }.apply { isDaemon = true }.start()
                 } catch (_: Exception) {
                     checking = false
+                    report(CheckResult.FAILED)
                 }
             }
-            .addOnFailureListener { checking = false }
+            .addOnFailureListener {
+                checking = false
+                report(CheckResult.FAILED)
+            }
     }
 
     private fun downloadAndInstall(ctx: Context, url: String) {

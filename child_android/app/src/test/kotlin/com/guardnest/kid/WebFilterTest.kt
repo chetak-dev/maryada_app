@@ -83,7 +83,7 @@ class WebFilterTest {
     }
 
     @Test
-    fun `browser lock follows safe browsing or the explicit flag`() {
+    fun `browser lock follows only the explicit flag`() {
         assertFalse(WebFilter.shouldLockOtherBrowsers())
 
         WebFilter.updatePolicy(
@@ -93,12 +93,14 @@ class WebFilterTest {
         )
         assertTrue(WebFilter.shouldLockOtherBrowsers())
 
+        // Safe browsing is permanently on, so tying the browser lock to it
+        // blocked every other browser on every device.
         WebFilter.updatePolicy(
             enabled = true,
             blockOtherBrowsers = false,
             categories = emptySet(),
         )
-        assertTrue(WebFilter.shouldLockOtherBrowsers())
+        assertFalse(WebFilter.shouldLockOtherBrowsers())
     }
 
     @Test

@@ -194,6 +194,25 @@ class FamilyRepository {
         .set({'name': name}, SetOptions(merge: true));
   }
 
+  /// Asks every device in the family to report right now.
+  ///
+  /// There is no push channel, so this stamps each profile and the devices that
+  /// are awake pick it up from the listener they already hold. A device that is
+  /// off or asleep reports at its next check-in, as it would anyway.
+  /// Returns how many profiles were asked.
+  Future<int> requestSync(String familyId) async {
+    final kids = await Db.children(familyId).get();
+    if (kids.docs.isEmpty) return 0;
+    final batch = Db.instance.batch();
+    for (final kid in kids.docs) {
+      batch.set(kid.reference, {
+        'syncRequestedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+    return kids.docs.length;
+  }
+
   Future<void> deleteProfile(String familyId, String childId) {
     return DataClearRepository.instance.deleteProfile(familyId, childId);
   }

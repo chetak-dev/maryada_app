@@ -40,15 +40,16 @@ void main() {
       expect(child.effectiveStatus, ChildStatus.online);
     });
 
-    test('a silent device is shown offline even if it says it is online', () {
-      // The device can't update its own `online` flag once it stops reporting
-      // (uninstalled, powered off, no network), so a stale heartbeat wins.
+    test('a silent device is still shown by its permissions', () {
+      // Phones kill background services, so a missed heartbeat used to flip a
+      // perfectly protected child to "offline". Silence is surfaced as a "last
+      // seen" line instead; only a missing permission changes the status.
       final child = childWith(
         status: ChildStatus.online,
         lastSeenAt: DateTime.now().subtract(const Duration(hours: 1)),
       );
       expect(child.isStale, isTrue);
-      expect(child.effectiveStatus, ChildStatus.offline);
+      expect(child.effectiveStatus, ChildStatus.online);
     });
 
     test('an unpaired device stays offline', () {
