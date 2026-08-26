@@ -56,6 +56,15 @@ object ChildStore {
     // The last parent-triggered sync this device has already acted on.
     private const val KEY_SYNC_REQUESTED = "syncRequestedAt"
 
+    // A place the child has arrived at but not yet stayed long enough for it to
+    // count as a visit.
+    private const val KEY_PENDING_LAT = "pendingLat"
+    private const val KEY_PENDING_LNG = "pendingLng"
+    private const val KEY_PENDING_AT = "pendingAt"
+
+    // Set once the shared pre-per-device usage document has been cleaned up.
+    private const val KEY_LEGACY_USAGE_DROPPED = "legacyUsageDropped"
+
     private fun prefs(ctx: Context) =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -136,6 +145,40 @@ object ChildStore {
 
     fun setSyncRequestedAt(ctx: Context, at: Long) {
         prefs(ctx).edit().putLong(KEY_SYNC_REQUESTED, at).apply()
+    }
+
+    /** Candidate place awaiting a dwell, or null when the child is settled. */
+    fun pendingPlace(ctx: Context): Triple<Double, Double, Long>? {
+        val p = prefs(ctx)
+        if (!p.contains(KEY_PENDING_AT)) return null
+        return Triple(
+            java.lang.Double.longBitsToDouble(p.getLong(KEY_PENDING_LAT, 0L)),
+            java.lang.Double.longBitsToDouble(p.getLong(KEY_PENDING_LNG, 0L)),
+            p.getLong(KEY_PENDING_AT, 0L),
+        )
+    }
+
+    fun setPendingPlace(ctx: Context, lat: Double, lng: Double, at: Long) {
+        prefs(ctx).edit()
+            .putLong(KEY_PENDING_LAT, java.lang.Double.doubleToRawLongBits(lat))
+            .putLong(KEY_PENDING_LNG, java.lang.Double.doubleToRawLongBits(lng))
+            .putLong(KEY_PENDING_AT, at)
+            .apply()
+    }
+
+    fun clearPendingPlace(ctx: Context) {
+        prefs(ctx).edit()
+            .remove(KEY_PENDING_LAT)
+            .remove(KEY_PENDING_LNG)
+            .remove(KEY_PENDING_AT)
+            .apply()
+    }
+
+    fun legacyUsageDropped(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_LEGACY_USAGE_DROPPED, false)
+
+    fun setLegacyUsageDropped(ctx: Context, value: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_LEGACY_USAGE_DROPPED, value).apply()
     }
 
     /** The family's display name (shown on the status screen), if known. */

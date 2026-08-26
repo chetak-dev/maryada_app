@@ -77,7 +77,6 @@ class EnforcementService : Service() {
                 heartbeat()
                 enforce()
                 reportLocation()
-                reportUsage()
                 reportWebHistory()
                 reportCallHistory()
                 reportSmsHistory()
@@ -252,7 +251,6 @@ class EnforcementService : Service() {
     /** Drops every reporting throttle so the next tick sends a full update. */
     private fun reportEverythingNow() {
         lastHeartbeat = 0L
-        lastUsageReport = 0L
         lastWebHistoryReport = 0L
         lastCallReport = 0L
         lastSmsReport = 0L
@@ -260,10 +258,13 @@ class EnforcementService : Service() {
         lastYoutubeReport = 0L
         lastAppCallReport = 0L
         lastLocationReport = 0L
+        // A sync is the parent asking to see everything now, so the
+        // unchanged-content guards must not hold the last state back.
+        lastCallDigest = 0
+        lastSmsDigest = 0
         handler.post {
             try {
                 heartbeat()
-                reportUsage()
                 reportInstalledApps()
                 reportWebHistory()
                 reportCallHistory()
@@ -400,6 +401,18 @@ class EnforcementService : Service() {
             payload["lastError"] = null
             payload["lastErrorAt"] = null
         }
+        // The current position rides along here instead of paying for its own
+        // write; the map's "updated" time stays honest because this runs on a
+        // timer whether the child has moved or not.
+        val lat = fixLat
+        val lng = fixLng
+        if (lat != null && lng != null) {
+            payload["lat"] = lat
+            payload["lng"] = lng
+            payload["locationAccuracy"] = fixAccuracy
+            payload["locationUpdatedAt"] = FieldValue.serverTimestamp()
+            fixAddress?.let { payload["address"] = it }
+        }
         FirebaseFirestore.getInstance()
             .collection("families").document(familyId)
             .collection("children").document(childId)
@@ -507,6 +520,14 @@ class EnforcementService : Service() {
     private var lastLocationReport = 0L
     private var lastUpdateCheck = 0L
 
+    // Latest fix, written out with the next heartbeat rather than as a write of
+    // its own. A stationary child would otherwise cost a write every cycle to
+    // say nothing had changed.
+    @Volatile private var fixLat: Double? = null
+    @Volatile private var fixLng: Double? = null
+    @Volatile private var fixAccuracy: Double = 0.0
+    @Volatile private var fixAddress: String? = null
+
     /** Periodically checks for a remotely-published app update (OTA). */
     private fun checkForUpdate() {
         val now = System.currentTimeMillis()
@@ -574,7 +595,12 @@ class EnforcementService : Service() {
         }
     }
 
-    /** Writes a location fix to the child doc + history (throttled by [LOCATION_MS]). */
+    /**
+     * Takes a location fix. The current position is NOT written here — it rides
+     * along with the next heartbeat, which already writes the child document,
+     * so tracking costs no writes of its own. Only a genuine new place is
+     * appended to the trail.
+     */
     private fun writeLocation(loc: Location) {
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
@@ -585,27 +611,17 @@ class EnforcementService : Service() {
 
         Thread {
             val address = reverseGeocode(lat, lng)
+            fixLat = lat
+            fixLng = lng
+            fixAccuracy = acc
+            fixAddress = address
             val childRef = FirebaseFirestore.getInstance()
                 .collection("families").document(familyId)
                 .collection("children").document(childId)
 
-            val current = hashMapOf<String, Any>(
-                "lat" to lat,
-                "lng" to lng,
-                "locationAccuracy" to acc,
-                "locationUpdatedAt" to FieldValue.serverTimestamp(),
-            )
-            if (address != null) current["address"] = address
-            childRef.set(current, SetOptions.merge())
-
-            // Append to the history trail only when the child is at a NEW place
-            // (so staying put doesn't fill the trail with duplicates), and at
-            // most once every 30 minutes so it stays a coarse timeline.
-            val now = System.currentTimeMillis()
-            val last = ChildStore.lastTrailPoint(this)
-            val dueForCheck = last == null || now - last.third >= LOCATION_HISTORY_MS
-            if (dueForCheck && isNewPlace(last, lat, lng, loc.accuracy)) {
-                ChildStore.setLastTrailPoint(this, lat, lng, now)
+            if (shouldRecordPlace(lat, lng, loc.accuracy)) {
+                ChildStore.setLastTrailPoint(this, lat, lng, System.currentTimeMillis())
+                ChildStore.clearPendingPlace(this)
                 val point = hashMapOf<String, Any>(
                     "lat" to lat,
                     "lng" to lng,
@@ -619,25 +635,54 @@ class EnforcementService : Service() {
     }
 
     /**
-     * True if this fix is far enough from the last recorded history point to be
-     * a distinct place (or if nothing has been recorded yet). Filters out GPS
-     * jitter and "sitting still" so only unique locations are kept. [last] is
-     * read from disk — the OS restarts this service often enough that an
-     * in-memory copy re-recorded the same place several times a day.
+     * Whether this fix is a place worth keeping, rather than another reading of
+     * somewhere already recorded.
+     *
+     * A plain "every 30 minutes, if it moved" rule filled the trail with the
+     * same place over and over: GPS drifts, a network fix can be a kilometre
+     * wide, and a child passing a road on the bus is not somewhere they went.
+     * So a new place has to be BOTH far enough away AND somewhere they actually
+     * stayed — the child has to still be there on a later fix before it counts.
+     * A large jump is recorded straight away, because waiting to confirm a
+     * different town would just lose the journey.
      */
-    private fun isNewPlace(
-        last: Triple<Double, Double, Long>?,
-        lat: Double,
-        lng: Double,
-        accuracy: Float,
-    ): Boolean {
-        if (last == null) return true
-        val results = FloatArray(1)
-        Location.distanceBetween(last.first, last.second, lat, lng, results)
-        // A network fix can be a kilometre wide, so a "move" smaller than the
-        // fix's own error is the same place seen twice.
+    private fun shouldRecordPlace(lat: Double, lng: Double, accuracy: Float): Boolean {
+        val last = ChildStore.lastTrailPoint(this)
+        if (last == null) {
+            ChildStore.clearPendingPlace(this)
+            return true
+        }
+        val moved = distanceTo(last.first, last.second, lat, lng)
+        // Never trust a move smaller than the fix's own margin of error.
         val threshold = maxOf(HISTORY_MIN_DISTANCE_M, accuracy)
-        return results[0] > threshold
+        if (moved <= threshold) {
+            ChildStore.clearPendingPlace(this)
+            return false
+        }
+        if (moved >= HISTORY_TELEPORT_M) return true
+
+        val now = System.currentTimeMillis()
+        val pending = ChildStore.pendingPlace(this)
+        // Somewhere new, or somewhere different from the last candidate: start
+        // the clock rather than recording a place still being passed through.
+        if (pending == null ||
+            distanceTo(pending.first, pending.second, lat, lng) > threshold
+        ) {
+            ChildStore.setPendingPlace(this, lat, lng, now)
+            return false
+        }
+        return now - pending.third >= HISTORY_DWELL_MS
+    }
+
+    private fun distanceTo(
+        fromLat: Double,
+        fromLng: Double,
+        toLat: Double,
+        toLng: Double,
+    ): Float {
+        val results = FloatArray(1)
+        Location.distanceBetween(fromLat, fromLng, toLat, toLng, results)
+        return results[0]
     }
 
     /** Turns coordinates into a short human-readable place name (best effort). */
@@ -675,50 +720,6 @@ class EnforcementService : Service() {
     private fun isPlusCode(s: String): Boolean =
         Regex("^[23456789CFGHJMPQRVWX]{4,8}\\+[23456789CFGHJMPQRVWX]{2,4}$", RegexOption.IGNORE_CASE)
             .matches(s.trim())
-
-    private var lastUsageReport = 0L
-
-    /**
-     * Reports screen-time usage (last 7 days + today's top apps) to the parent,
-     * throttled. Needs the "Usage access" grant; silently skips otherwise.
-     */
-    private fun reportUsage() {
-        val now = System.currentTimeMillis()
-        if (now - lastUsageReport < USAGE_MS) return
-        val familyId = ChildStore.familyId(this) ?: return
-        val childId = ChildStore.childId(this) ?: return
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
-        val summary = UsageReporter.build(this) ?: return
-        lastUsageReport = now
-
-        val usage = FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .collection("usage")
-        // One document per device, matching every other feed. The shared
-        // `summary` document meant a PC on the same profile erased the phone's
-        // screen time each time it reported.
-        usage.document(uid)
-            .set(
-                mapOf(
-                    "week" to summary.week.map {
-                        mapOf("day" to it.label, "minutes" to it.minutes)
-                    },
-                    "topApps" to summary.topApps.map {
-                        mapOf(
-                            "packageName" to it.packageName,
-                            "appName" to it.label,
-                            "minutes" to it.minutes,
-                        )
-                    },
-                    "platform" to "android",
-                    "deviceUid" to uid,
-                    "updatedAt" to FieldValue.serverTimestamp(),
-                ),
-                SetOptions.merge()
-            )
-            .addOnSuccessListener { usage.document("summary").delete() }
-    }
 
     private var lastWebHistoryReport = 0L
 
@@ -1077,10 +1078,15 @@ class EnforcementService : Service() {
     }
 
     private var lastCallReport = 0L
+    private var lastCallDigest = 0
 
     /**
      * Reports the child's recent call log to the parent (throttled). Needs the
      * READ_CALL_LOG grant; silently skips otherwise.
+     *
+     * The log changes a handful of times a day, so the write only happens when
+     * the contents actually differ — re-sending an identical list every cycle
+     * burned most of this device's daily write budget saying nothing.
      */
     private fun reportCallHistory() {
         val now = System.currentTimeMillis()
@@ -1098,6 +1104,9 @@ class EnforcementService : Service() {
                 "duration" to it.durationSeconds,
             )
         }
+        val digest = payload.hashCode()
+        if (digest == lastCallDigest) return
+        lastCallDigest = digest
         reportDoc(familyId, childId, "callHistory")
             .set(
                 mapOf(
@@ -1110,10 +1119,12 @@ class EnforcementService : Service() {
     }
 
     private var lastSmsReport = 0L
+    private var lastSmsDigest = 0
 
     /**
      * Reports the child's recent SMS inbox/sent to the parent (throttled). Needs
-     * the READ_SMS grant; silently skips otherwise.
+     * the READ_SMS grant; silently skips otherwise. Only written when the
+     * contents changed — see [reportCallHistory].
      */
     private fun reportSmsHistory() {
         val now = System.currentTimeMillis()
@@ -1130,6 +1141,9 @@ class EnforcementService : Service() {
                 "at" to it.date,
             )
         }
+        val digest = payload.hashCode()
+        if (digest == lastSmsDigest) return
+        lastSmsDigest = digest
         reportDoc(familyId, childId, "smsHistory")
             .set(
                 mapOf(
@@ -1645,20 +1659,29 @@ class EnforcementService : Service() {
         )
         private const val FOREGROUND_FRESH_MS = 10_000L
         private const val FOREGROUND_QUERY_MS = 1_500L
-        private const val HEARTBEAT_MS = 120_000L
-        private const val USAGE_MS = 120_000L
-        private const val LOCATION_MS = 120_000L
+        // Every one of these costs a Firestore write, and the free tier allows
+        // 20,000 a day for the WHOLE family. At 50 children that is a budget of
+        // 400 writes per device per day, so nothing here reports on a timer
+        // unless it has something new to say.
+        private const val HEARTBEAT_MS = 1_200_000L // 20 min
+        private const val LOCATION_MS = 300_000L
         private const val LOCATION_HISTORY_MS = 1_800_000L
-        // Minimum distance (metres) from the last history point to count as a
-        // new, distinct place worth recording.
-        private const val HISTORY_MIN_DISTANCE_M = 100f
-        private const val WEBHISTORY_MS = 45_000L
-        private const val CALLS_MS = 120_000L
+        // A new place must be at least this far from the last one recorded, and
+        // further than the fix's own accuracy.
+        private const val HISTORY_MIN_DISTANCE_M = 250f
+        // How long the child must still be there before it counts as a visit
+        // rather than somewhere they were passing through.
+        private const val HISTORY_DWELL_MS = 10 * 60 * 1000L
+        // Far enough that it is plainly a different place; recorded at once so
+        // a journey isn't lost waiting for a dwell to confirm it.
+        private const val HISTORY_TELEPORT_M = 3_000f
+        private const val WEBHISTORY_MS = 300_000L
+        private const val CALLS_MS = 300_000L
         private const val PERM_PROMPT_MS = 60_000L
-        private const val SMS_MS = 120_000L
-        private const val MESSAGES_MS = 30_000L
-        private const val YOUTUBE_MS = 30_000L
-        private const val APP_CALLS_MS = 60_000L
+        private const val SMS_MS = 300_000L
+        private const val MESSAGES_MS = 120_000L
+        private const val YOUTUBE_MS = 300_000L
+        private const val APP_CALLS_MS = 300_000L
         private const val UPDATE_CHECK_MS = 3 * 60 * 60 * 1000L // 3 hours
         /** Tolerance before a chat time is treated as belonging to yesterday. */
         private const val FUTURE_SLACK_MS = 5 * 60 * 1000L

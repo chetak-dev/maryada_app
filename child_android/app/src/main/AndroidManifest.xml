@@ -35,6 +35,7 @@
         tools:ignore="ProtectedPermissions" />
 
     <application
+        android:name=".GuardNestApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="Maryada"

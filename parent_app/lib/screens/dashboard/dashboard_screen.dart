@@ -50,11 +50,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       appBar: AppBar(
         titleSpacing: AppSpacing.md,
         title: const BrandLockup(markSize: 32),
-        actions: [
-          SyncButton(uid: _live ? uid : null),
-          const ThemeToggleButton(),
-          const ProfileButton(),
-          const SizedBox(width: AppSpacing.xs),
+        actions: const [
+          ThemeToggleButton(),
+          ProfileButton(),
+          SizedBox(width: AppSpacing.xs),
         ],
       ),
       // Scrollable only as a safety net: the sections are sized to fit one
@@ -510,9 +509,16 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
 
   /// "See all" opens the Profiles page, which is also where profiles are
   /// created and devices paired, so it shows even while the family is empty.
+  /// Sync sits beside it because both act on the whole family.
   Widget _headerActions({VoidCallback? onSeeAll}) {
     if (onSeeAll == null) return const SizedBox.shrink();
-    return TextButton(onPressed: onSeeAll, child: const Text('See all'));
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SyncButton(uid: widget.uid),
+        TextButton(onPressed: onSeeAll, child: const Text('See all')),
+      ],
+    );
   }
 
   @override

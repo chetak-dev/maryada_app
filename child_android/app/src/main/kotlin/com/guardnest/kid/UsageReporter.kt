@@ -81,40 +81,6 @@ object UsageReporter {
         return totalMin to toAppUsage(pm, byPkg)
     }
 
-    /**
-     * Builds the last-7-days daily totals and today's top apps. Returns null if
-     * access isn't granted (nothing to report yet).
-     */
-    fun build(ctx: Context): Summary? {
-        if (!hasAccess(ctx)) return null
-        val usm = ctx.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val pm = ctx.packageManager
-        val dayFmt = SimpleDateFormat("EEE", Locale.getDefault())
-        val now = System.currentTimeMillis()
-
-        val week = ArrayList<DayUsage>(7)
-        var todayApps: Map<String, Long> = emptyMap()
-
-        for (dayOffset in 6 downTo 0) {
-            val cal = Calendar.getInstance().apply {
-                add(Calendar.DAY_OF_YEAR, -dayOffset)
-                set(Calendar.HOUR_OF_DAY, 0)
-                set(Calendar.MINUTE, 0)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }
-            val startMs = cal.timeInMillis
-            val endMs = minOf(startMs + 24L * 60 * 60 * 1000, now)
-            val byPkg = usableApps(
-                pm, ctx.packageName,
-                foregroundMsByPackage(usm, startMs, endMs)
-            )
-            week.add(DayUsage(dayFmt.format(cal.time), (byPkg.values.sum() / 60000L).toInt()))
-            if (dayOffset == 0) todayApps = byPkg
-        }
-        return Summary(week, toAppUsage(pm, todayApps))
-    }
-
     // ----- Real foreground-time calculation (from UsageEvents) -----
 
     private fun startOfTodayMs(): Long = Calendar.getInstance().apply {

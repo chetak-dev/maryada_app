@@ -124,9 +124,6 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
     super.dispose();
   }
 
-  /// Profiles missing a permission sort first — they're the ones needing a look.
-  int _priority(Child c) => _statusOf(c) == ChildStatus.online ? 1 : 0;
-
   List<({Child child, String familyId})> get _visible {
     final q = _query.trim().toLowerCase();
     final out = _kids.where((k) {
@@ -134,11 +131,12 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
       if (q.isEmpty) return true;
       return k.child.name.toLowerCase().contains(q);
     }).toList();
-    out.sort((a, b) {
-      final p = _priority(a.child).compareTo(_priority(b.child));
-      if (p != 0) return p;
-      return a.child.name.toLowerCase().compareTo(b.child.name.toLowerCase());
-    });
+    // Straight A-Z. Sorting problems to the top moved profiles around as
+    // devices reported, so the same child was never in the same place twice;
+    // the "Needs attention" chip is the way to find them instead.
+    out.sort(
+      (a, b) => a.child.name.toLowerCase().compareTo(b.child.name.toLowerCase()),
+    );
     return out;
   }
 
@@ -286,7 +284,8 @@ class ProfileTile extends StatelessWidget {
   Widget _build(BuildContext context, List<Device> devices) {
     // Each device stamps the profile document, so its status is whichever one
     // reported last. The devices themselves are the truth.
-    final worst = ProfileStatus.worst(devices);    final status = child.effectiveStatus;
+    final worst = ProfileStatus.worst(devices);
+    final status = child.effectiveStatus;
     final removed = worst != null
         ? worst.likelyRemoved || worst.removalUnlocked
         : status == ChildStatus.removed;

@@ -17,7 +17,6 @@ import '../../widgets/net_guard.dart';
 import '../../widgets/typed_danger_dialog.dart';
 import '../../widgets/whatsapp_mark.dart';
 import '../activity/activity_screen.dart';
-import '../app_activity/app_activity_screen.dart';
 import '../app_rules/app_rules_screen.dart';
 import '../call_history/call_history_screen.dart';
 import '../chat_history/chat_history_screen.dart';
@@ -338,26 +337,6 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                             ),
                           ),
                         ),
-                      cell(
-                        _FeatureTile(
-                          icon: Icons.bar_chart_rounded,
-                          color: AppColors.primary,
-                          title: 'App activity',
-                          onTap: () => Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => AppActivityScreen(
-                                childName: _name,
-                                familyId: familyId,
-                                childId: child.id,
-                                deviceId: effectiveDeviceId,
-                                deviceLabel: scope.isEmpty
-                                    ? null
-                                    : scope.first.label,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
                       if (has(DeviceFeature.location))
                         cell(
                           _FeatureTile(
