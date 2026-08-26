@@ -214,16 +214,21 @@ class Device {
     return (name == null || name.isEmpty) ? '' : 'v$name';
   }
 
-  static Device fromDoc(String id, Map<String, dynamic> m) {
+  static Device fromDoc(
+    String id,
+    Map<String, dynamic> m, {
+    DateTime? profileSeenAt,
+  }) {
     final rawProt = m['protections'];
     final rawCaps = m['capabilities'];
+    final own = (m['lastSeenAt'] as Timestamp?)?.toDate();
     return Device(
       id: id,
       deviceModel: (m['deviceModel'] ?? 'Device').toString(),
       displayName: (m['displayName'] ?? '').toString().trim(),
       platform: (m['platform'] ?? 'android').toString(),
       online: m['online'] == true,
-      lastSeenAt: (m['lastSeenAt'] as Timestamp?)?.toDate(),
+      lastSeenAt: _latest(own, profileSeenAt),
       permissionsOk: m['permissionsOk'] == true,
       appVersionCode: (m['appVersionCode'] as num?)?.toInt() ?? 0,
       appVersionName: m['appVersionName'] as String?,
@@ -243,6 +248,12 @@ class Device {
       lastError: m['lastError'] as String?,
       lastErrorAt: (m['lastErrorAt'] as Timestamp?)?.toDate(),
     );
+  }
+
+  static DateTime? _latest(DateTime? a, DateTime? b) {
+    if (a == null) return b;
+    if (b == null) return a;
+    return b.isAfter(a) ? b : a;
   }
 }
 

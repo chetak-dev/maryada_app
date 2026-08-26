@@ -352,7 +352,10 @@ class FamilyRepository {
       appVersionName: (map['appVersionName'] as String?),
       lastError: (map['lastError'] as String?),
       lastErrorAt: (map['lastErrorAt'] as Timestamp?)?.toDate(),
-      devices: _devicesFromMap(map['devices']),
+      devices: devicesFromMap(
+        map['devices'],
+        (map['lastSeenAt'] as Timestamp?)?.toDate(),
+      ),
     );
   }
 
@@ -360,15 +363,26 @@ class FamilyRepository {
   /// overwrite one another. Ordered by platform then label — sorting by "last
   /// seen" reshuffled the list on every heartbeat, which moved the default
   /// device selection under the parent's finger.
-  static List<Device> _devicesFromMap(dynamic raw) {
+  ///
+  /// [profileSeenAt] is the profile's own heartbeat, used only when it holds a
+  /// single device: that device *is* the profile, so the two are the same
+  /// event. Devices on a build that predates the `devices` map stamp only the
+  /// profile, and would otherwise sit at whatever time they were last recorded
+  /// and read as "not reporting" while perfectly healthy.
+  @visibleForTesting
+  static List<Device> devicesFromMap(dynamic raw, [DateTime? profileSeenAt]) {
     if (raw is! Map) return const [];
-    final devices = [
+    final live = [
       for (final e in raw.entries)
-        if (e.value is Map && (e.value as Map)['revoked'] != true)
-          Device.fromDoc(
-            e.key.toString(),
-            Map<String, dynamic>.from(e.value as Map),
-          ),
+        if (e.value is Map && (e.value as Map)['revoked'] != true) e,
+    ];
+    final devices = [
+      for (final e in live)
+        Device.fromDoc(
+          e.key.toString(),
+          Map<String, dynamic>.from(e.value as Map),
+          profileSeenAt: live.length == 1 ? profileSeenAt : null,
+        ),
     ];
     devices.sort((a, b) {
       final platform = _platformRank(a).compareTo(_platformRank(b));
