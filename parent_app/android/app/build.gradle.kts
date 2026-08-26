@@ -37,6 +37,18 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Shipped arm64-only to keep the download small. The plugins still bring
+    // 32-bit and x86 libraries of their own, and leaving them in advertises
+    // support this build cannot honour: the Flutter engine is arm64-only, so
+    // such a phone would install the app and then crash on launch instead of
+    // being told it isn't compatible. `ndk.abiFilters` does NOT cover these —
+    // it only filters code built by the NDK, not prebuilt plugin libraries.
+    packaging {
+        jniLibs {
+            excludes += setOf("lib/armeabi-v7a/**", "lib/x86_64/**", "lib/x86/**")
+        }
+    }
 }
 
 kotlin {
