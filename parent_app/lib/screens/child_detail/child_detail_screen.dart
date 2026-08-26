@@ -10,7 +10,6 @@ import '../../models/child.dart';
 import '../../models/device.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/access_scope.dart';
-import '../../widgets/child_devices.dart';
 import '../../widgets/dialog_buttons.dart';
 import '../../widgets/feedback.dart';
 import '../../widgets/net_guard.dart';
@@ -48,6 +47,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
   /// be pointed at rather than the parent comparing version strings by eye.
   int _latestVersionCode = 0;
   StreamSubscription<AppUpdateConfig>? _updateSub;
+  StreamSubscription<List<({Child child, String familyId})>>? _kidsSub;
 
   @override
   void initState() {
@@ -56,12 +56,24 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
       _updateSub = AppUpdateRepository.instance.watch().listen((c) {
         if (mounted) setState(() => _latestVersionCode = c.versionCode);
       });
+      // The same stream the switcher reads, so following the profile live
+      // costs nothing extra — and its devices stay current while the page
+      // is open.
+      _kidsSub = FamilyRepository.instance.watchMyChildren().listen((kids) {
+        if (!mounted) return;
+        for (final k in kids) {
+          if (k.child.id != _child.id) continue;
+          setState(() => _child = k.child);
+          return;
+        }
+      });
     }
   }
 
   @override
   void dispose() {
     _updateSub?.cancel();
+    _kidsSub?.cancel();
     super.dispose();
   }
 
@@ -86,6 +98,12 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
     final child = _child;
     final familyId = _familyId;
     final canEdit = AccessScope.of(context);
+    // The profile document is stamped by every device, so its status, version
+    // and last error are whichever device reported last. The devices are the
+    // truth, and they ride on the profile the switcher already watches.
+    final devices = child.devices;
+    final faulty = ProfileStatus.faulty(devices);
+    final erroring = devices.where((d) => d.hasRecentError).toList();
     return Scaffold(
       appBar: AppBar(
         title: Text(_name),
@@ -99,293 +117,279 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
           const SizedBox(width: AppSpacing.xs),
         ],
       ),
-      // One subscription for the whole page: the profile document is
-      // stamped by every device, so its status, version and last error are
-      // whichever device reported last. The devices are the truth.
-      body: ChildDevices(
-        familyId: familyId,
-        childId: child.id,
-        builder: (context, devices) {
-          final faulty = ProfileStatus.faulty(devices);
-          final erroring = devices.where((d) => d.hasRecentError).toList();
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Pinned: which child you are looking at, and their status. Both
-              // scrolled away, so half way down the page there was nothing
-              // saying whose data was on screen.
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md,
-                  AppSpacing.sm,
-                  AppSpacing.md,
-                  0,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Pinned: which child you are looking at, and their status. Both
+          // scrolled away, so half way down the page there was nothing
+          // saying whose data was on screen.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              AppSpacing.sm,
+              AppSpacing.md,
+              0,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (Db.ready)
+                  _ChildSwitcher(currentId: child.id, onSelect: _switchTo),
+                _ProfileHeaderCard(
+                  name: _name,
+                  child: child,
+                  devices: devices,
+                  faulty: faulty,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (Db.ready)
-                      _ChildSwitcher(
-                        currentId: child.id,
-                        onSelect: _switchTo,
-                      ),
-                    _ProfileHeaderCard(
-                      name: _name,
-                      child: child,
-                      devices: devices,
-                      faulty: faulty,
-                    ),
-                  ],
-                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.md),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.md,
+                0,
+                AppSpacing.md,
+                AppSpacing.xxl,
               ),
-              const SizedBox(height: AppSpacing.md),
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(
-                    AppSpacing.md,
-                    0,
-                    AppSpacing.md,
-                    AppSpacing.xxl,
-                  ),
-                  children: [
-                  for (final device in erroring) ...[
-                    _DeviceIssueCard(device: device),
-                    const SizedBox(height: AppSpacing.md),
-                  ],
-                  if (_live) ...[
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Devices',
-                            style: theme.textTheme.titleMedium,
-                          ),
-                        ),
-                        if (canEdit)
-                          TextButton.icon(
-                            onPressed: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => PairDeviceScreen(
-                                  familyId: familyId!,
-                                  child: child,
-                                ),
-                              ),
-                            ),
-                            icon: const Icon(Icons.add_rounded, size: 18),
-                            label: const Text('Add device'),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: AppSpacing.xs),
-                    _DeviceList(
-                      familyId: familyId!,
-                      childId: child.id,
-                      devices: devices,
-                      selectedId: _deviceId,
-                      latestVersionCode: _latestVersionCode,
-                      onSelect: (id) => setState(() => _deviceId = id),
-                    ),
-                    const SizedBox(height: AppSpacing.lg),
-                  ],
-                  Text('Manage', style: theme.textTheme.titleMedium),
-                  const SizedBox(height: AppSpacing.sm),
-                  // A centered Wrap instead of a grid: with an odd tile count
-                  // the last tile sits in the middle rather than hanging left.
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final w = (constraints.maxWidth - AppSpacing.sm) / 2;
-                      final h = w / 1.15;
-                      Widget cell(Widget tile) =>
-                          SizedBox(width: w, height: h, child: tile);
-                      // A PC cannot report calls or SMS, so those tiles would
-                      // open a screen that stays empty for good. Devices
-                      // declare what they can report and the tiles follow.
-                      final effectiveDeviceId =
-                          _deviceId ??
-                          (devices.isNotEmpty ? devices.first.id : null);
-                      // With one device selected the tiles describe that device
-                      // rather than the whole profile.
-                      final scope = effectiveDeviceId == null
-                          ? devices
-                          : devices
-                                .where((d) => d.id == effectiveDeviceId)
-                                .toList();
-                      bool has(String feature) =>
-                          DeviceFeature.supportedBy(scope, feature);
-                      final selectedPlatform =
-                          effectiveDeviceId == null || scope.isEmpty
-                          ? null
-                          : scope.first.platform;
-                      return Wrap(
-                    spacing: AppSpacing.sm,
-                    runSpacing: AppSpacing.sm,
-                    alignment: WrapAlignment.center,
+              children: [
+                for (final device in erroring) ...[
+                  _DeviceIssueCard(device: device),
+                  const SizedBox(height: AppSpacing.md),
+                ],
+                if (_live) ...[
+                  Row(
                     children: [
-                      if (has(DeviceFeature.calls))
-                        cell(
-                          _FeatureTile(
-                            icon: Icons.call_rounded,
-                            color: AppColors.info,
-                            title: 'Call history',
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => CallHistoryScreen(
-                                  childName: _name,
-                                  familyId: familyId,
-                                  childId: child.id,
-                                  deviceId: effectiveDeviceId,
-                                ),
-                              ),
-                            ),
-                          ),
+                      Expanded(
+                        child: Text(
+                          'Devices',
+                          style: theme.textTheme.titleMedium,
                         ),
-                      if (has(DeviceFeature.sms))
-                        cell(
-                          _FeatureTile(
-                            icon: Icons.sms_rounded,
-                            color: AppColors.success,
-                            title: 'Messages',
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => SmsHistoryScreen(
-                                  childName: _name,
-                                  familyId: familyId,
-                                  childId: child.id,
-                                  deviceId: effectiveDeviceId,
-                                ),
+                      ),
+                      if (canEdit)
+                        TextButton.icon(
+                          onPressed: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => PairDeviceScreen(
+                                familyId: familyId!,
+                                child: child,
                               ),
                             ),
                           ),
-                        ),
-                      if (has(DeviceFeature.chats))
-                        cell(
-                          _FeatureTile(
-                            mark: const WhatsAppMark(size: 44),
-                            icon: Icons.forum_rounded,
-                            color: WhatsAppMark.brandGreen,
-                            title: 'WhatsApp',
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => ChatHistoryScreen(
-                                  childName: _name,
-                                  familyId: familyId,
-                                  childId: child.id,
-                                  deviceId: effectiveDeviceId,
-                                  platform: selectedPlatform,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      if (has(DeviceFeature.youtube))
-                        cell(
-                          _FeatureTile(
-                            icon: Icons.smart_display_rounded,
-                            color: AppColors.danger,
-                            title: 'YouTube',
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => YoutubeHistoryScreen(
-                                  childName: _name,
-                                  familyId: familyId,
-                                  childId: child.id,
-                                  deviceId: effectiveDeviceId,
-                                  platform: selectedPlatform,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      if (has(DeviceFeature.webHistory))
-                        cell(
-                          _FeatureTile(
-                            icon: Icons.public_rounded,
-                            color: AppColors.info,
-                            title: 'Web activity',
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => ActivityScreen(
-                                  childName: child.name,
-                                  familyId: familyId,
-                                  childId: child.id,
-                                  deviceId: effectiveDeviceId,
-                                  platform: selectedPlatform,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      if (has(DeviceFeature.appBlocking))
-                        cell(
-                          _FeatureTile(
-                            icon: Icons.apps_rounded,
-                            color: AppColors.accent,
-                            title: 'App rules',
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => AppRulesScreen(
-                                  childName: _name,
-                                  familyId: familyId,
-                                  childId: child.id,
-                                  deviceId: effectiveDeviceId,
-                                  deviceLabel: scope.isEmpty
-                                      ? null
-                                      : scope.first.label,
-                                  platform: selectedPlatform,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      if (has(DeviceFeature.location))
-                        cell(
-                          _FeatureTile(
-                            icon: Icons.location_on_rounded,
-                            color: AppColors.warning,
-                            title: 'Location',
-                            onTap: () => Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => LocationScreen(
-                                  childName: _name,
-                                  familyId: familyId,
-                                  childId: child.id,
-                                ),
-                              ),
-                            ),
-                          ),
+                          icon: const Icon(Icons.add_rounded, size: 18),
+                          label: const Text('Add device'),
                         ),
                     ],
-                  );
-                    },
                   ),
-                  const SizedBox(height: AppSpacing.xxl),
-                  if (canEdit)
-                    OutlinedButton.icon(
-                      onPressed: () => _confirmDeleteProfile(context),
-                      icon: const Icon(
-                        Icons.delete_forever_rounded,
-                        color: AppColors.danger,
-                        size: 18,
+                  const SizedBox(height: AppSpacing.xs),
+                  _DeviceList(
+                    familyId: familyId!,
+                    childId: child.id,
+                    devices: devices,
+                    selectedId: _deviceId,
+                    latestVersionCode: _latestVersionCode,
+                    onSelect: (id) => setState(() => _deviceId = id),
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                ],
+                Text('Manage', style: theme.textTheme.titleMedium),
+                const SizedBox(height: AppSpacing.sm),
+                // A centered Wrap instead of a grid: with an odd tile count
+                // the last tile sits in the middle rather than hanging left.
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final w = (constraints.maxWidth - AppSpacing.sm) / 2;
+                    final h = w / 1.15;
+                    Widget cell(Widget tile) =>
+                        SizedBox(width: w, height: h, child: tile);
+                    // A PC cannot report calls or SMS, so those tiles would
+                    // open a screen that stays empty for good. Devices
+                    // declare what they can report and the tiles follow.
+                    final effectiveDeviceId =
+                        _deviceId ??
+                        (devices.isNotEmpty ? devices.first.id : null);
+                    // With one device selected the tiles describe that device
+                    // rather than the whole profile.
+                    final scope = effectiveDeviceId == null
+                        ? devices
+                        : devices
+                              .where((d) => d.id == effectiveDeviceId)
+                              .toList();
+                    bool has(String feature) =>
+                        DeviceFeature.supportedBy(scope, feature);
+                    final selectedPlatform =
+                        effectiveDeviceId == null || scope.isEmpty
+                        ? null
+                        : scope.first.platform;
+                    return Wrap(
+                      spacing: AppSpacing.sm,
+                      runSpacing: AppSpacing.sm,
+                      alignment: WrapAlignment.center,
+                      children: [
+                        if (has(DeviceFeature.calls))
+                          cell(
+                            _FeatureTile(
+                              icon: Icons.call_rounded,
+                              color: AppColors.info,
+                              title: 'Call history',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => CallHistoryScreen(
+                                    childName: _name,
+                                    familyId: familyId,
+                                    childId: child.id,
+                                    deviceId: effectiveDeviceId,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (has(DeviceFeature.sms))
+                          cell(
+                            _FeatureTile(
+                              icon: Icons.sms_rounded,
+                              color: AppColors.success,
+                              title: 'Messages',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => SmsHistoryScreen(
+                                    childName: _name,
+                                    familyId: familyId,
+                                    childId: child.id,
+                                    deviceId: effectiveDeviceId,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (has(DeviceFeature.chats))
+                          cell(
+                            _FeatureTile(
+                              mark: const WhatsAppMark(size: 44),
+                              icon: Icons.forum_rounded,
+                              color: WhatsAppMark.brandGreen,
+                              title: 'WhatsApp',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ChatHistoryScreen(
+                                    childName: _name,
+                                    familyId: familyId,
+                                    childId: child.id,
+                                    deviceId: effectiveDeviceId,
+                                    platform: selectedPlatform,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (has(DeviceFeature.youtube))
+                          cell(
+                            _FeatureTile(
+                              icon: Icons.smart_display_rounded,
+                              color: AppColors.danger,
+                              title: 'YouTube',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => YoutubeHistoryScreen(
+                                    childName: _name,
+                                    familyId: familyId,
+                                    childId: child.id,
+                                    deviceId: effectiveDeviceId,
+                                    platform: selectedPlatform,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (has(DeviceFeature.webHistory))
+                          cell(
+                            _FeatureTile(
+                              icon: Icons.public_rounded,
+                              color: AppColors.info,
+                              title: 'Web activity',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ActivityScreen(
+                                    childName: child.name,
+                                    familyId: familyId,
+                                    childId: child.id,
+                                    deviceId: effectiveDeviceId,
+                                    platform: selectedPlatform,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (has(DeviceFeature.appBlocking))
+                          cell(
+                            _FeatureTile(
+                              icon: Icons.apps_rounded,
+                              color: AppColors.accent,
+                              title: 'App rules',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => AppRulesScreen(
+                                    childName: _name,
+                                    familyId: familyId,
+                                    childId: child.id,
+                                    deviceId: effectiveDeviceId,
+                                    deviceLabel: scope.isEmpty
+                                        ? null
+                                        : scope.first.label,
+                                    platform: selectedPlatform,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        if (has(DeviceFeature.location))
+                          cell(
+                            _FeatureTile(
+                              icon: Icons.location_on_rounded,
+                              color: AppColors.warning,
+                              title: 'Location',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => LocationScreen(
+                                    childName: _name,
+                                    familyId: familyId,
+                                    childId: child.id,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: AppSpacing.xxl),
+                if (canEdit)
+                  OutlinedButton.icon(
+                    onPressed: () => _confirmDeleteProfile(context),
+                    icon: const Icon(
+                      Icons.delete_forever_rounded,
+                      color: AppColors.danger,
+                      size: 18,
+                    ),
+                    label: const Text(
+                      'Delete profile',
+                      style: TextStyle(color: AppColors.danger),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(
+                        color: AppColors.danger.withValues(alpha: 0.4),
                       ),
-                      label: const Text(
-                        'Delete profile',
-                        style: TextStyle(color: AppColors.danger),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        side: BorderSide(
-                          color: AppColors.danger.withValues(alpha: 0.4),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          vertical: AppSpacing.sm,
-                        ),
+                      padding: const EdgeInsets.symmetric(
+                        vertical: AppSpacing.sm,
                       ),
                     ),
-                ],
-              ),
+                  ),
+              ],
             ),
-            ],
-          );
-        },
+          ),
+        ],
       ),
     );
   }
@@ -448,9 +452,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
     // Devices must be removed one by one first: deleting a profile under a
     // live installation would leave it enforcing rules nobody can manage.
     if (_live) {
-      final devices = await DeviceRepository.instance
-          .watch(_familyId!, _child.id)
-          .first;
+      final devices = _child.devices;
       if (devices.isNotEmpty) {
         if (!context.mounted) return;
         await showDialog<void>(
@@ -560,9 +562,7 @@ class _ProfileHeaderCard extends StatelessWidget {
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               border: Border.all(
-                color: child.paired
-                    ? statusColor
-                    : AppColors.borderOf(context),
+                color: child.paired ? statusColor : AppColors.borderOf(context),
                 width: 2.5,
               ),
             ),
@@ -576,9 +576,7 @@ class _ProfileHeaderCard extends StatelessWidget {
                       size: 26,
                     )
                   : Text(
-                      name.trim().isEmpty
-                          ? '?'
-                          : name.trim()[0].toUpperCase(),
+                      name.trim().isEmpty ? '?' : name.trim()[0].toUpperCase(),
                       style: const TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w800,
@@ -1121,11 +1119,7 @@ class _DeviceCard extends StatelessWidget {
                   color: device.platformColor.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(AppRadius.md),
                 ),
-                child: Icon(
-                  device.icon,
-                  color: device.platformColor,
-                  size: 24,
-                ),
+                child: Icon(device.icon, color: device.platformColor, size: 24),
               ),
               const SizedBox(width: AppSpacing.sm),
               Expanded(

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
+import 'device.dart';
 
 /// A profile is either fully protected (every required permission granted on
 /// the device) or it isn't. A quiet device is NOT the same thing: phones kill
@@ -74,6 +75,11 @@ class Child {
   final String? lastError;
   final DateTime? lastErrorAt;
 
+  /// Every installation on this profile. They each stamp the fields above too,
+  /// so on their own those read as whichever device reported last — anything
+  /// that must be true of the *profile* is worked out from this list.
+  final List<Device> devices;
+
   const Child({
     required this.id,
     required this.name,
@@ -94,6 +100,7 @@ class Child {
     this.appVersionName,
     this.lastError,
     this.lastErrorAt,
+    this.devices = const [],
   });
 
   /// A silent device is still worth surfacing, but as "last seen", never as the
@@ -107,7 +114,12 @@ class Child {
 
   /// What the UI should show. Kept as a getter so callers don't have to know
   /// that the status already accounts for everything.
-  ChildStatus get effectiveStatus => status;
+  ChildStatus get effectiveStatus {
+    final worst = ProfileStatus.worst(devices);
+    if (worst == null) return status;
+    if (worst.likelyRemoved || worst.removalUnlocked) return ChildStatus.removed;
+    return worst.severity == 0 ? ChildStatus.online : ChildStatus.offline;
+  }
 
   bool get hasLocation => lat != null && lng != null;
 

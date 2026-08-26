@@ -1,53 +1,31 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-import '../models/device.dart';
 import 'data_clear_repository.dart';
 import 'db.dart';
 
-/// Reads the devices attached to a child's profile from
-/// `families/{familyId}/children/{childId}/devices`.
+/// Changes a parent can make to one installation.
+///
+/// Devices live in a `devices` map on the profile document, keyed by device
+/// uid, so the one listener over the family's profiles already carries every
+/// device's state. A subcollection needed a listener per profile, and a family
+/// of fifty ran straight into Firestore's hundred-listener limit.
 class DeviceRepository {
   DeviceRepository._();
   static final instance = DeviceRepository._();
-
-  Stream<List<Device>> watch(String familyId, String childId) {
-    return Db.child(familyId, childId)
-        .collection('devices')
-        .snapshots()
-        .map((snap) {
-        final devices = snap.docs
-          .where((d) => d.data()['revoked'] != true)
-          .map((d) => Device.fromDoc(d.id, d.data()))
-          .toList();
-      // A stable order. Sorting by "most recently seen" reshuffled the list
-      // every time a device sent a heartbeat, which also moved the default
-      // selection — so a parent could open a screen scoped to a device they
-      // had not chosen.
-      devices.sort((a, b) {
-        final platform = _platformRank(a).compareTo(_platformRank(b));
-        if (platform != 0) return platform;
-        final label = a.label.toLowerCase().compareTo(b.label.toLowerCase());
-        return label != 0 ? label : a.id.compareTo(b.id);
-      });
-      return devices;
-    });
-  }
-
-  static int _platformRank(Device d) => switch (d.platform) {
-        'android' => 0,
-        'windows' => 1,
-        _ => 2,
-      };
 
   /// Removes one installation and everything it reported. The profile and its
   /// other devices stay; when this was the last device the whole activity
   /// history is wiped and the profile returns to "no device linked".
   Future<void> revoke(String familyId, String childId, String deviceId) async {
     final childRef = Db.child(familyId, childId);
-    await childRef.collection('devices').doc(deviceId).set({
-      'revoked': true,
-      'revokedAt': FieldValue.serverTimestamp(),
-      'online': false,
+    await childRef.set({
+      'devices': {
+        deviceId: {
+          'revoked': true,
+          'revokedAt': FieldValue.serverTimestamp(),
+          'online': false,
+        },
+      },
     }, SetOptions(merge: true));
 
     // This device's own report documents (one per feed, keyed by device id;
@@ -70,21 +48,28 @@ class DeviceRepository {
       await Db.instance.collection('devices').doc(deviceId).delete();
     } catch (_) {}
 
-    // Stop the pairing slot pointing at the removed installation.
+    Map<String, dynamic> data = const {};
     try {
-      final child = await childRef.get();
-      if ((child.data()?['deviceUid'] ?? '') == deviceId) {
-        await childRef.set(
-            {'deviceUid': FieldValue.delete()}, SetOptions(merge: true));
-      }
+      data = (await childRef.get()).data() ?? const {};
     } catch (_) {}
+
+    // Stop the pairing slot pointing at the removed installation.
+    if ((data['deviceUid'] ?? '') == deviceId) {
+      try {
+        await childRef
+            .set({'deviceUid': FieldValue.delete()}, SetOptions(merge: true));
+      } catch (_) {}
+    }
 
     // Last device gone: wipe every remaining trace (usage, location, chats,
     // alerts, the legacy 'current' docs) and un-pair the profile so it shows
     // no status and no apps.
-    final remaining = await childRef.collection('devices').get();
-    final anyActive =
-        remaining.docs.any((d) => d.data()['revoked'] != true);
+    final devices = data['devices'];
+    final anyActive = devices is Map &&
+        devices.entries.any((e) =>
+            e.key != deviceId &&
+            e.value is Map &&
+            (e.value as Map)['revoked'] != true);
     if (!anyActive) {
       await DataClearRepository.instance.clearChildActivity(familyId, childId);
       await childRef.set({
@@ -99,8 +84,10 @@ class DeviceRepository {
   /// reporting its own model, which is used as the fallback when this is blank.
   Future<void> rename(
       String familyId, String childId, String deviceId, String name) {
-    return Db.child(familyId, childId).collection('devices').doc(deviceId).set({
-      'displayName': name,
+    return Db.child(familyId, childId).set({
+      'devices': {
+        deviceId: {'displayName': name},
+      },
     }, SetOptions(merge: true));
   }
 }

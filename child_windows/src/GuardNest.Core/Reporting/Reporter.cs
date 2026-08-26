@@ -47,10 +47,6 @@ public sealed class Reporter
         fields["lastError"] = error?.Message;
         fields["lastErrorAt"] = error?.At;
 
-        await _firestore.MergeAsync(
-            $"families/{state.FamilyId}/children/{state.ChildId}",
-            fields, ct, serverTimestamps: new[] { "lastSeenAt" });
-
         var deviceRecord = new Dictionary<string, object?>(fields)
         {
             ["platform"] = AppConfig.Platform,
@@ -61,24 +57,23 @@ public sealed class Reporter
         };
         if (state.DeviceName.Length > 0) deviceRecord["displayName"] = state.DeviceName;
 
+        // This device's own copy, under its uid, so a profile can hold several
+        // devices without them overwriting each other's state. Masking each leaf
+        // keeps one heartbeat to one write and leaves `pairedAt`/`revoked` alone.
+        var slot = $"devices.`{_auth.Uid}`";
+        var mask = fields.Keys.Concat(deviceRecord.Keys.Select(k => $"{slot}.{k}")).ToList();
+        mask.Add($"{slot}.lastSeenAt");
+        fields["devices"] = new Dictionary<string, object?> { [_auth.Uid] = deviceRecord };
+
         await _firestore.MergeAsync(
-            $"families/{state.FamilyId}/children/{state.ChildId}/devices/{_auth.Uid}",
-            deviceRecord, ct, serverTimestamps: new[] { "lastSeenAt" });
+            $"families/{state.FamilyId}/children/{state.ChildId}",
+            fields, ct,
+            serverTimestamps: new[] { "lastSeenAt", $"{slot}.lastSeenAt" },
+            maskPaths: mask);
 
         // Reaching Firestore proves the device is healthy, so whatever it just
         // reported is history.
         if (error is not null) Diag.ClearResolved(error.Value.At);
-    }
-
-    public Task ReportUsageAsync(
-        DeviceState state, IReadOnlyDictionary<string, object?> summary, CancellationToken ct)
-    {
-        var payload = new Dictionary<string, object?>(summary) { ["deviceUid"] = _auth.Uid };
-        // One document per device. Writing the shared `summary` as well would
-        // overwrite whatever a phone on the same profile had reported.
-        return _firestore.MergeAsync(
-            $"families/{state.FamilyId}/children/{state.ChildId}/usage/{_auth.Uid}",
-            payload, ct, serverTimestamps: new[] { "updatedAt" });
     }
 
     public async Task ReportInstalledAppsAsync(

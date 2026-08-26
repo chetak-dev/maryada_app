@@ -251,7 +251,6 @@ public sealed class EnforcementWorker : BackgroundService
             _appNames = NamesOf(inventory);
             try
             {
-                await _reporter.ReportUsageAsync(_state, _usage.BuildSummary(), ct);
                 await _reporter.ReportInstalledAppsAsync(_state, inventory, ct);
             }
             catch (FirestoreException e)

@@ -75,23 +75,26 @@ object Pairing {
                 SetOptions.merge()
             ).await()
 
-        // A removed installation keeps its device record as an audit/revocation
-        // marker. Pairing it again is the only operation allowed to reactivate
-        // that exact installation.
+        // A removed installation keeps its entry in the profile's devices map
+        // as an audit/revocation marker. Pairing it again is the only operation
+        // allowed to reactivate that exact installation.
         val deviceName = snap.getString("deviceName")?.trim() ?: ""
         ChildStore.setDeviceName(ctx, deviceName)
         try {
             db.collection("families").document(familyId)
                 .collection("children").document(childId)
-                .collection("devices").document(user.uid)
                 .set(
                     mapOf(
-                        "deviceUid" to user.uid,
-                        "deviceModel" to "${Build.MANUFACTURER} ${Build.MODEL}",
-                        "displayName" to deviceName,
-                        "platform" to "android",
-                        "revoked" to false,
-                        "pairedAt" to FieldValue.serverTimestamp(),
+                        "devices" to mapOf(
+                            user.uid to mapOf(
+                                "deviceUid" to user.uid,
+                                "deviceModel" to "${Build.MANUFACTURER} ${Build.MODEL}",
+                                "displayName" to deviceName,
+                                "platform" to "android",
+                                "revoked" to false,
+                                "pairedAt" to FieldValue.serverTimestamp(),
+                            )
+                        )
                     ),
                     SetOptions.merge()
                 ).await()

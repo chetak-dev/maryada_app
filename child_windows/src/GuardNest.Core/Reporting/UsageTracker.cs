@@ -50,54 +50,6 @@ public sealed class UsageTracker
         }
     }
 
-    /// <summary>
-    /// The `usage/{deviceUid}` payload: seven days of totals plus today's top
-    /// apps, in the shape UsageRepository already reads.
-    /// </summary>
-    public IReadOnlyDictionary<string, object?> BuildSummary()
-    {
-        lock (_gate)
-        {
-            var week = new List<object?>();
-            for (var offset = 6; offset >= 0; offset--)
-            {
-                var date = DateTime.Today.AddDays(-offset);
-                var key = date.ToString("yyyy-MM-dd");
-                var minutes = _store.Days.TryGetValue(key, out var apps)
-                    ? (int)(apps.Values.Sum() / 60)
-                    : 0;
-                week.Add(new Dictionary<string, object?>
-                {
-                    ["day"] = date.ToString("ddd"),
-                    ["minutes"] = minutes,
-                });
-            }
-
-            var topApps = new List<object?>();
-            if (_store.Days.TryGetValue(Today(), out var todayApps))
-            {
-                foreach (var entry in todayApps.OrderByDescending(e => e.Value).Take(6))
-                {
-                    var minutes = (int)(entry.Value / 60);
-                    if (minutes < 1) continue;
-                    topApps.Add(new Dictionary<string, object?>
-                    {
-                        ["appName"] = _store.Names.GetValueOrDefault(entry.Key, entry.Key),
-                        ["packageName"] = entry.Key,
-                        ["minutes"] = minutes,
-                    });
-                }
-            }
-
-            return new Dictionary<string, object?>
-            {
-                ["week"] = week,
-                ["topApps"] = topApps,
-                ["platform"] = AppConfig.Platform,
-            };
-        }
-    }
-
     private void Prune()
     {
         var cutoff = DateTime.Today.AddDays(-RetainedDays).ToString("yyyy-MM-dd");

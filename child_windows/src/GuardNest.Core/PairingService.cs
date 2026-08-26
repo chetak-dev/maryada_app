@@ -60,19 +60,32 @@ public sealed class PairingService
             ct,
             serverTimestamps: new[] { "pairedAt", "lastSeenAt" });
 
+        var slot = $"devices.`{uid}`";
         await _firestore.MergeAsync(
-            $"families/{familyId}/children/{childId}/devices/{uid}",
+            $"families/{familyId}/children/{childId}",
             new Dictionary<string, object?>
             {
-                ["deviceUid"] = uid,
-                ["deviceModel"] = model,
-                ["displayName"] = deviceName,
-                ["platform"] = AppConfig.Platform,
-                ["revoked"] = false,
-                ["capabilities"] = DeviceCapabilities.AsMap(),
+                ["devices"] = new Dictionary<string, object?>
+                {
+                    [uid] = new Dictionary<string, object?>
+                    {
+                        ["deviceUid"] = uid,
+                        ["deviceModel"] = model,
+                        ["displayName"] = deviceName,
+                        ["platform"] = AppConfig.Platform,
+                        ["revoked"] = false,
+                        ["capabilities"] = DeviceCapabilities.AsMap(),
+                    },
+                },
             },
             ct,
-            serverTimestamps: new[] { "pairedAt" });
+            serverTimestamps: new[] { $"{slot}.pairedAt" },
+            maskPaths: new[]
+            {
+                $"{slot}.deviceUid", $"{slot}.deviceModel", $"{slot}.displayName",
+                $"{slot}.platform", $"{slot}.revoked", $"{slot}.capabilities",
+                $"{slot}.pairedAt",
+            });
 
         await RegisterDeviceAsync(familyId, childId, ct);
 

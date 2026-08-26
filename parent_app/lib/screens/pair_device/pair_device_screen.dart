@@ -53,14 +53,11 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     _linkSub?.cancel();
     _linkSub = Db.children(widget.familyId)
         .doc(widget.child.id)
-        .collection('devices')
         .snapshots()
         .listen((snap) {
-      final active = snap.docs
-          .where((d) => d.data()['revoked'] != true)
-          .map((d) => d.id)
-          .toSet();
-      if (active.difference(_devicesBefore).isEmpty) return;
+      if (_activeDevices(snap.data()).difference(_devicesBefore).isEmpty) {
+        return;
+      }
       _linkSub?.cancel();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -70,6 +67,17 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       );
       Navigator.of(context).pop();
     });
+  }
+
+  /// The uids of the installations on the profile that haven't been revoked.
+  static Set<String> _activeDevices(Map<String, dynamic>? child) {
+    final devices = child?['devices'];
+    if (devices is! Map) return const {};
+    return {
+      for (final e in devices.entries)
+        if (e.value is Map && (e.value as Map)['revoked'] != true)
+          e.key.toString(),
+    };
   }
 
   /// The admin's limit counts paired devices across the family — profiles are
@@ -122,12 +130,8 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
       // an installation that appears after this code was issued.
       final before = await Db.children(widget.familyId)
           .doc(widget.child.id)
-          .collection('devices')
           .get();
-      _devicesBefore = before.docs
-          .where((d) => d.data()['revoked'] != true)
-          .map((d) => d.id)
-          .toSet();
+      _devicesBefore = _activeDevices(before.data());
       final code = await FamilyRepository.instance.generatePairingCode(
           familyId: widget.familyId,
           childId: widget.child.id,

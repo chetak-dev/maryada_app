@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -5,9 +6,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../models/child.dart';
+import '../models/device.dart';
 import '../models/family.dart';
 import 'data_clear_repository.dart';
 import 'db.dart';
+import 'reporting_cadence.dart';
 
 /// Reads/writes families, children and the pairing handshake in Firestore.
 /// All calls assume Firebase is connected ([Db.ready] == true); the UI keeps
@@ -16,7 +19,8 @@ class FamilyRepository {
   FamilyRepository._();
   static final instance = FamilyRepository._();
 
-  static const _codeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no confusables
+  static const _codeChars =
+      'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no confusables
   static const _codeTtl = Duration(minutes: 15);
 
   // ---- Families ----------------------------------------------------------
@@ -25,8 +29,10 @@ class FamilyRepository {
     return Db.families
         .where('parentUids', arrayContains: uid)
         .snapshots()
-        .map((s) =>
-            s.docs.map((d) => FamilyModel.fromMap(d.id, d.data())).toList());
+        .map(
+          (s) =>
+              s.docs.map((d) => FamilyModel.fromMap(d.id, d.data())).toList(),
+        );
   }
 
   /// The one family this account may see: the one the site admin's grant
@@ -34,15 +40,14 @@ class FamilyRepository {
   /// in its `parentUids` (the dashboard joins on sign-in — reading children
   /// before that would be denied by the rules). Emits '' when unassigned.
   Stream<String> watchMyFamilyId(String uid) {
-    return Db.instance
-        .collection('users')
-        .doc(uid)
-        .snapshots()
-        .asyncExpand((d) {
+    return Db.instance.collection('users').doc(uid).snapshots().asyncExpand((
+      d,
+    ) {
       final granted = (d.data()?['familyId'] ?? '').toString();
       if (granted.isEmpty) return Stream.value('');
-      return watchFamilies(uid)
-          .map((fams) => fams.any((f) => f.id == granted) ? granted : '');
+      return watchFamilies(
+        uid,
+      ).map((fams) => fams.any((f) => f.id == granted) ? granted : '');
     });
   }
 
@@ -82,18 +87,16 @@ class FamilyRepository {
   /// Every family, for the site admin's grant dialog.
   Future<List<FamilyModel>> listFamilies() async {
     final snap = await Db.families.get();
-    return snap.docs
-        .map((d) => FamilyModel.fromMap(d.id, d.data()))
-        .toList()
+    return snap.docs.map((d) => FamilyModel.fromMap(d.id, d.data())).toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   }
 
   /// Every family, live, for the site admin's console.
   Stream<List<FamilyModel>> watchAllFamilies() {
-    return Db.families.snapshots().map((s) => s.docs
-        .map((d) => FamilyModel.fromMap(d.id, d.data()))
-        .toList()
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase())));
+    return Db.families.snapshots().map(
+      (s) => s.docs.map((d) => FamilyModel.fromMap(d.id, d.data())).toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase())),
+    );
   }
 
   /// What's attached to a family: child profiles and registered devices.
@@ -114,11 +117,13 @@ class FamilyRepository {
     final load = await familyLoad(familyId);
     if (load.children > 0) {
       throw StateError(
-          'this family still has ${load.children} child profile(s). Delete them first.');
+        'this family still has ${load.children} child profile(s). Delete them first.',
+      );
     }
     if (load.devices > 0) {
       throw StateError(
-          'this family still has ${load.devices} registered device(s). Remove them first.');
+        'this family still has ${load.devices} registered device(s). Remove them first.',
+      );
     }
     // Firestore doesn't cascade-delete subcollections with the parent doc.
     for (final sub in ['rules', 'appRules', 'alerts']) {
@@ -134,10 +139,8 @@ class FamilyRepository {
 
   Stream<List<Child>> watchChildren(String familyId) {
     return Db.children(familyId).snapshots().map(
-          (s) => s.docs
-              .map((d) => _childFromDoc(d.id, d.data()))
-              .toList(),
-        );
+      (s) => s.docs.map((d) => _childFromDoc(d.id, d.data())).toList(),
+    );
   }
 
   /// Every child profile in the signed-in parent's own family.
@@ -146,7 +149,9 @@ class FamilyRepository {
   /// children, so this follows the family their grant assigned — not whatever
   /// families they happen to still be listed in. Profiles without a device
   /// show too — a parent creates the profile first, then pairs devices to it.
-  Stream<List<({Child child, String familyId})>> watchMyChildren([String? uid]) {
+  Stream<List<({Child child, String familyId})>> watchMyChildren([
+    String? uid,
+  ]) {
     final me = uid ?? FirebaseAuth.instance.currentUser?.uid;
     if (me == null) {
       return Stream.value(const <({Child child, String familyId})>[]);
@@ -155,11 +160,14 @@ class FamilyRepository {
       if (familyId.isEmpty) {
         return Stream.value(const <({Child child, String familyId})>[]);
       }
-      return watchChildren(familyId).map((kids) => kids
-          .map((c) => (child: c, familyId: familyId))
-          .toList()
-        ..sort((a, b) =>
-            a.child.name.toLowerCase().compareTo(b.child.name.toLowerCase())));
+      return watchChildren(familyId).map(
+        (kids) => kids.map((c) => (child: c, familyId: familyId)).toList()
+          ..sort(
+            (a, b) => a.child.name.toLowerCase().compareTo(
+              b.child.name.toLowerCase(),
+            ),
+          ),
+      );
     });
   }
 
@@ -179,6 +187,8 @@ class FamilyRepository {
       'permissionsOk': false,
       'createdAt': FieldValue.serverTimestamp(),
     });
+    // One more mouth at the write budget: everyone slows down a little.
+    unawaited(syncReportingCadence(familyId));
     return Child(
       id: doc.id,
       name: name,
@@ -188,10 +198,35 @@ class FamilyRepository {
     );
   }
 
+  /// Republishes the heartbeat cadence for [familyId] from its current profile
+  /// count. Devices read this and slow down as the family grows, so the free
+  /// tier's daily write allowance is shared rather than raced for.
+  ///
+  /// Safe to call often: it only writes when the interval actually changes.
+  Future<void> syncReportingCadence(String familyId) async {
+    if (familyId.isEmpty) return;
+    final doc =
+        Db.families.doc(familyId).collection('rules').doc('reporting');
+    try {
+      final kids = await Db.children(familyId).count().get();
+      final count = kids.count ?? 0;
+      final wanted = ReportingCadence.forChildCount(count).inMilliseconds;
+      final current = await doc.get();
+      if (current.data()?['heartbeatMs'] == wanted) return;
+      await doc.set({
+        'heartbeatMs': wanted,
+        'childCount': count,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (_) {
+      // Best effort: devices fall back to their own default cadence.
+    }
+  }
+
   Future<void> renameChild(String familyId, String childId, String name) {
-    return Db.children(familyId)
-        .doc(childId)
-        .set({'name': name}, SetOptions(merge: true));
+    return Db.children(
+      familyId,
+    ).doc(childId).set({'name': name}, SetOptions(merge: true));
   }
 
   /// Asks every device in the family to report right now.
@@ -213,15 +248,17 @@ class FamilyRepository {
     return kids.docs.length;
   }
 
-  Future<void> deleteProfile(String familyId, String childId) {
-    return DataClearRepository.instance.deleteProfile(familyId, childId);
+  Future<void> deleteProfile(String familyId, String childId) async {
+    await DataClearRepository.instance.deleteProfile(familyId, childId);
+    await syncReportingCadence(familyId);
   }
 
   /// Live stream of a single child doc (banking-mode & protection status).
   Stream<Child?> watchChild(String familyId, String childId) {
-    return Db.children(familyId).doc(childId).snapshots().map(
-          (d) => d.exists ? _childFromDoc(d.id, d.data()!) : null,
-        );
+    return Db.children(familyId)
+        .doc(childId)
+        .snapshots()
+        .map((d) => d.exists ? _childFromDoc(d.id, d.data()!) : null);
   }
 
   // ---- Pairing -----------------------------------------------------------
@@ -246,9 +283,9 @@ class FamilyRepository {
       // Non-fatal: pairing still works without the name.
     }
     if (familyName.isNotEmpty) {
-      await Db.children(familyId)
-          .doc(childId)
-          .set({'familyName': familyName}, SetOptions(merge: true));
+      await Db.children(
+        familyId,
+      ).doc(childId).set({'familyName': familyName}, SetOptions(merge: true));
     }
     await Db.pairingCodes.doc(code).set({
       'familyId': familyId,
@@ -272,8 +309,7 @@ class FamilyRepository {
     final rawProt = map['protections'];
     final protections = <String, bool>{
       if (rawProt is Map)
-        for (final e in rawProt.entries)
-          e.key.toString(): e.value == true,
+        for (final e in rawProt.entries) e.key.toString(): e.value == true,
     };
 
     // Protected means every required permission is granted on the device. The
@@ -289,8 +325,8 @@ class FamilyRepository {
     final status = !adminActive && paired
         ? ChildStatus.removed
         : paired && setupComplete && allProtectionsOk
-            ? ChildStatus.online
-            : ChildStatus.offline;
+        ? ChildStatus.online
+        : ChildStatus.offline;
 
     double? d(dynamic v) => v is num ? v.toDouble() : null;
 
@@ -299,7 +335,8 @@ class FamilyRepository {
       name: (map['name'] ?? 'Child').toString(),
       deviceModel: (map['deviceModel'] ?? '').toString(),
       avatarColor: Color(
-          (map['avatarColor'] is int) ? map['avatarColor'] as int : 0xFF4F46E5),
+        (map['avatarColor'] is int) ? map['avatarColor'] as int : 0xFF4F46E5,
+      ),
       status: status,
       lat: d(map['lat']),
       lng: d(map['lng']),
@@ -315,12 +352,44 @@ class FamilyRepository {
       appVersionName: (map['appVersionName'] as String?),
       lastError: (map['lastError'] as String?),
       lastErrorAt: (map['lastErrorAt'] as Timestamp?)?.toDate(),
+      devices: _devicesFromMap(map['devices']),
     );
   }
+
+  /// The profile's installations, each under its own device uid so they never
+  /// overwrite one another. Ordered by platform then label — sorting by "last
+  /// seen" reshuffled the list on every heartbeat, which moved the default
+  /// device selection under the parent's finger.
+  static List<Device> _devicesFromMap(dynamic raw) {
+    if (raw is! Map) return const [];
+    final devices = [
+      for (final e in raw.entries)
+        if (e.value is Map && (e.value as Map)['revoked'] != true)
+          Device.fromDoc(
+            e.key.toString(),
+            Map<String, dynamic>.from(e.value as Map),
+          ),
+    ];
+    devices.sort((a, b) {
+      final platform = _platformRank(a).compareTo(_platformRank(b));
+      if (platform != 0) return platform;
+      final label = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+      return label != 0 ? label : a.id.compareTo(b.id);
+    });
+    return devices;
+  }
+
+  static int _platformRank(Device d) => switch (d.platform) {
+    'android' => 0,
+    'windows' => 1,
+    _ => 2,
+  };
 
   String _randomCode([int length = 6]) {
     final rand = Random.secure();
     return List.generate(
-        length, (_) => _codeChars[rand.nextInt(_codeChars.length)]).join();
+      length,
+      (_) => _codeChars[rand.nextInt(_codeChars.length)],
+    ).join();
   }
 }

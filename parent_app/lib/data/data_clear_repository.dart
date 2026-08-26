@@ -96,9 +96,17 @@ class DataClearRepository {
   /// installation would leave it enforcing rules nobody can see or change.
   Future<void> deleteProfile(String familyId, String childId) async {
     final childRef = Db.child(familyId, childId);
-    final devices = await childRef.collection('devices').get();
-    final active =
-        devices.docs.where((d) => d.data()['revoked'] != true).length;
+    final child = await childRef.get();
+    final raw = child.data()?['devices'];
+    final devices = raw is Map
+        ? {
+            for (final e in raw.entries)
+              e.key.toString(): (e.value is Map)
+                  ? Map<String, dynamic>.from(e.value as Map)
+                  : const <String, dynamic>{},
+          }
+        : const <String, Map<String, dynamic>>{};
+    final active = devices.values.where((d) => d['revoked'] != true).length;
     if (active > 0) {
       throw StateError(
           'This profile still has $active linked device(s). Remove them first.');
@@ -107,6 +115,9 @@ class DataClearRepository {
     // Delete the profile first so connected installations immediately unpair.
     await childRef.delete();
     await _clearChild(familyId, childId, null);
+    // Devices live in the profile's `devices` map now; this sweeps the old
+    // subcollection, which Firestore does not cascade-delete, off profiles
+    // created before that change.
     await _deleteQuery(childRef.collection('devices'));
     await _clearAlerts(familyId, {childId}, null);
 
@@ -125,9 +136,9 @@ class DataClearRepository {
     // A connected child removes this itself; this also cleans up devices that
     // may never come online again. Older deployed rules may reject it, so the
     // profile deletion must not depend on this best-effort cleanup.
-    for (final device in devices.docs) {
+    for (final deviceId in devices.keys) {
       try {
-        await Db.instance.collection('devices').doc(device.id).delete();
+        await Db.instance.collection('devices').doc(deviceId).delete();
       } catch (_) {}
     }
   }

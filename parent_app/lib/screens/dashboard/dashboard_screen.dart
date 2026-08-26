@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -17,7 +17,6 @@ import '../../models/screen_time_rule.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/access_scope.dart';
 import '../../widgets/brand_mark.dart';
-import '../../widgets/child_devices.dart';
 import '../../widgets/profile_button.dart';
 import '../../widgets/sync_button.dart';
 import '../../widgets/theme_toggle_button.dart';
@@ -60,7 +59,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // screen, this just keeps a short screen from overflowing.
       body: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(
-            AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.md),
+          AppSpacing.md,
+          AppSpacing.sm,
+          AppSpacing.md,
+          AppSpacing.md,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -92,12 +95,27 @@ class _GreetingHeader extends StatelessWidget {
 
   String get _date {
     const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     const days = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
-      'Friday', 'Saturday', 'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
     ];
     final now = DateTime.now();
     return '${days[now.weekday - 1]}, ${now.day} ${months[now.month - 1]}';
@@ -126,8 +144,12 @@ class _GreetingHeader extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(AppSpacing.lg, AppSpacing.lg,
-                AppSpacing.lg, AppSpacing.md),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.lg,
+              AppSpacing.lg,
+              AppSpacing.lg,
+              AppSpacing.md,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -162,7 +184,10 @@ class _GreetingHeader extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: AppSpacing.lg),
-                Container(height: 1, color: Colors.white.withValues(alpha: 0.18)),
+                Container(
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.18),
+                ),
                 const SizedBox(height: AppSpacing.md),
                 _FamilyPulse(uid: uid),
               ],
@@ -188,8 +213,8 @@ class _FamilyPulseState extends State<_FamilyPulse> {
   // rebuild and each fresh subscription waits on a server round trip.
   late final Stream<List<({Child child, String familyId})>>? _kids =
       widget.uid == null
-          ? null
-          : FamilyRepository.instance.watchMyChildren(widget.uid);
+      ? null
+      : FamilyRepository.instance.watchMyChildren(widget.uid);
   late final Stream<String>? _famId = widget.uid == null
       ? null
       : FamilyRepository.instance.watchMyFamilyId(widget.uid!);
@@ -231,10 +256,7 @@ class _FamilyPulseState extends State<_FamilyPulse> {
 }
 
 class _PulseRow extends StatelessWidget {
-  const _PulseRow({
-    required this.profiles,
-    required this.devices,
-  });
+  const _PulseRow({required this.profiles, required this.devices});
 
   final int profiles;
   final int devices;
@@ -244,11 +266,14 @@ class _PulseRow extends StatelessWidget {
     return Row(
       children: [
         _PulseStat(
-            value: profiles, label: profiles == 1 ? 'Profile' : 'Profiles'),
+          value: profiles,
+          label: profiles == 1 ? 'Profile' : 'Profiles',
+        ),
         _PulseDivider(),
         _PulseStat(
-            value: devices,
-            label: devices == 1 ? 'Device linked' : 'Devices linked'),
+          value: devices,
+          label: devices == 1 ? 'Device linked' : 'Devices linked',
+        ),
       ],
     );
   }
@@ -259,10 +284,10 @@ class _PulseDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: 1,
-        height: 30,
-        color: Colors.white.withValues(alpha: 0.18),
-      );
+    width: 1,
+    height: 30,
+    color: Colors.white.withValues(alpha: 0.18),
+  );
 }
 
 class _PulseStat extends StatelessWidget {
@@ -301,7 +326,6 @@ class _PulseStat extends StatelessWidget {
   }
 }
 
-
 /// The Screen-time control tile, which shows a live red badge on the home
 /// screen whenever the device is paused or bedtime is on.
 class _ScreenTimeControlTile extends StatelessWidget {
@@ -319,10 +343,8 @@ class _ScreenTimeControlTile extends StatelessWidget {
   }
 
   void _open(BuildContext context) => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ScreenTimeScreen(familyId: familyId),
-        ),
-      );
+    MaterialPageRoute(builder: (_) => ScreenTimeScreen(familyId: familyId)),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -367,10 +389,8 @@ class _WebFilterControlTile extends StatelessWidget {
   final String? familyId;
 
   void _open(BuildContext context) => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => WebFilterScreen(familyId: familyId),
-        ),
-      );
+    MaterialPageRoute(builder: (_) => WebFilterScreen(familyId: familyId)),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -470,18 +490,20 @@ class _FamilyChildren extends StatefulWidget {
 class _FamilyChildrenState extends State<_FamilyChildren> {
   Timer? _ticker;
   bool _provisioning = false;
+  bool _cadenceSynced = false;
   int _latestVersionCode = 0;
   StreamSubscription<AppUpdateConfig>? _updateSub;
 
   // Subscribed once. Built inside build() these re-subscribed on every rebuild
   // (the 30s ticker alone rebuilds constantly), so a freshly created profile
   // waited a full server round trip instead of appearing from the local write.
-  late final Stream<AppUser?> _userStream =
-      UserRepository.instance.watch(widget.uid!);
+  late final Stream<AppUser?> _userStream = UserRepository.instance.watch(
+    widget.uid!,
+  );
   late final Stream<List<({Child child, String familyId})>> _kidsStream =
       FamilyRepository.instance.watchMyChildren(widget.uid);
-  late final Stream<List<FamilyModel>> _famStream =
-      FamilyRepository.instance.watchFamilies(widget.uid!);
+  late final Stream<List<FamilyModel>> _famStream = FamilyRepository.instance
+      .watchFamilies(widget.uid!);
 
   @override
   void initState() {
@@ -529,15 +551,10 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _SectionLabel(
-            title: 'Your family',
-            trailing: _headerActions(),
-          ),
+          _SectionLabel(title: 'Your family', trailing: _headerActions()),
           const SizedBox(height: AppSpacing.sm),
           _FamilyStrip(
-            kids: [
-              for (final c in demoChildren) (child: c, familyId: ''),
-            ],
+            kids: [for (final c in demoChildren) (child: c, familyId: '')],
           ),
         ],
       );
@@ -583,8 +600,10 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
                   WidgetsBinding.instance.addPostFrameCallback((_) async {
                     try {
                       if (!isMember) {
-                        await FamilyRepository.instance
-                            .joinFamily(grantedFamilyId, uid);
+                        await FamilyRepository.instance.joinFamily(
+                          grantedFamilyId,
+                          uid,
+                        );
                       }
                       for (final f in strays) {
                         await FamilyRepository.instance.leaveFamily(f.id, uid);
@@ -594,6 +613,18 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
                     } finally {
                       _provisioning = false;
                     }
+                  });
+                }
+
+                // Families that existed before the cadence was derived, or
+                // whose count drifted, get put right here rather than waiting
+                // for somebody to add or remove a profile.
+                if (famReady && grantedFamilyId.isNotEmpty && !_cadenceSynced) {
+                  _cadenceSynced = true;
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    FamilyRepository.instance.syncReportingCadence(
+                      grantedFamilyId,
+                    );
                   });
                 }
 
@@ -670,15 +701,15 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
   }
 
   Widget _childrenLoader() => const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
-        child: Center(
-          child: SizedBox(
-            width: 32,
-            height: 32,
-            child: CircularProgressIndicator(strokeWidth: 3),
-          ),
-        ),
-      );
+    padding: EdgeInsets.symmetric(vertical: 24),
+    child: Center(
+      child: SizedBox(
+        width: 32,
+        height: 32,
+        child: CircularProgressIndicator(strokeWidth: 3),
+      ),
+    ),
+  );
 }
 
 /// Shown when the site admin hasn't assigned this account a family yet.
@@ -692,18 +723,25 @@ class _NoFamilyCard extends StatelessWidget {
         padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           children: [
-            const Icon(Icons.home_work_outlined,
-                size: 34, color: AppColors.textMuted),
+            const Icon(
+              Icons.home_work_outlined,
+              size: 34,
+              color: AppColors.textMuted,
+            ),
             const SizedBox(height: AppSpacing.xs),
-            const Text('No family assigned',
-                style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text(
+              'No family assigned',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: AppSpacing.xs),
             Text(
               'Your administrator hasn\u2019t linked this account to a family '
               'yet. Ask them to grant your email access again.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: 12.5, color: AppColors.textSecondaryOf(context)),
+                fontSize: 12.5,
+                color: AppColors.textSecondaryOf(context),
+              ),
             ),
           ],
         ),
@@ -724,21 +762,27 @@ class _EmptyChildren extends StatelessWidget {
         padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           children: [
-            const Icon(Icons.child_care_rounded,
-                size: 34, color: AppColors.textMuted),
+            const Icon(
+              Icons.child_care_rounded,
+              size: 34,
+              color: AppColors.textMuted,
+            ),
             const SizedBox(height: AppSpacing.xs),
-            const Text('No profiles yet',
-                style: TextStyle(fontWeight: FontWeight.w600)),
+            const Text(
+              'No profiles yet',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: AppSpacing.xs),
             Text(
               canAdd
                   ? 'Create a profile for each child; devices are added from '
-                      'inside the profile.'
+                        'inside the profile.'
                   : 'Children added by any org admin appear here.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: 12.5,
-                  color: AppColors.textSecondaryOf(context)),
+                fontSize: 12.5,
+                color: AppColors.textSecondaryOf(context),
+              ),
             ),
             if (onAdd != null) ...[
               const SizedBox(height: AppSpacing.sm),
@@ -765,8 +809,7 @@ class _SectionLabel extends StatelessWidget {
     return Row(
       children: [
         Expanded(
-          child: Text(title,
-              style: Theme.of(context).textTheme.titleMedium),
+          child: Text(title, style: Theme.of(context).textTheme.titleMedium),
         ),
         ?trailing,
       ],
@@ -787,7 +830,9 @@ class _FamilyStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.sm, vertical: AppSpacing.sm),
+        horizontal: AppSpacing.sm,
+        vertical: AppSpacing.sm,
+      ),
       decoration: BoxDecoration(
         color: AppColors.surfaceOf(context),
         borderRadius: BorderRadius.circular(AppRadius.lg),
@@ -815,14 +860,7 @@ class _AvatarChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChildDevices(
-      familyId: familyId,
-      childId: child.id,
-      builder: (context, devices) => _build(context, devices),
-    );
-  }
-
-  Widget _build(BuildContext context, List<Device> devices) {
+    final devices = child.devices;
     // The devices are the truth: they each stamp the profile document, so its
     // own status is whichever of them reported last.
     final worst = ProfileStatus.worst(devices);
@@ -835,8 +873,7 @@ class _AvatarChip extends StatelessWidget {
         ? worst.severity == 0
         : status == ChildStatus.online;
     // No device yet — no status: plain grey ring, no badge.
-    final ringColor =
-        child.paired ? statusColor : AppColors.borderOf(context);
+    final ringColor = child.paired ? statusColor : AppColors.borderOf(context);
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.md),
       onTap: () => Navigator.of(context).push(
@@ -874,11 +911,15 @@ class _AvatarChip extends StatelessWidget {
                       ),
                       child: CircleAvatar(
                         radius: 21,
-                        backgroundColor:
-                            removed ? AppColors.danger : child.avatarColor,
+                        backgroundColor: removed
+                            ? AppColors.danger
+                            : child.avatarColor,
                         child: removed
-                            ? const Icon(Icons.gpp_bad_rounded,
-                                color: Colors.white, size: 22)
+                            ? const Icon(
+                                Icons.gpp_bad_rounded,
+                                color: Colors.white,
+                                size: 22,
+                              )
                             : Text(
                                 child.initials,
                                 style: const TextStyle(
@@ -901,7 +942,9 @@ class _AvatarChip extends StatelessWidget {
                             color: statusColor,
                             shape: BoxShape.circle,
                             border: Border.all(
-                                color: AppColors.surfaceOf(context), width: 2),
+                              color: AppColors.surfaceOf(context),
+                              width: 2,
+                            ),
                           ),
                           child: Icon(
                             ok
@@ -925,7 +968,10 @@ class _AvatarChip extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                    fontSize: 11.5, fontWeight: FontWeight.w600, height: 1.15),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  height: 1.15,
+                ),
               ),
             ),
           ],
@@ -960,10 +1006,14 @@ class _AddChip extends StatelessWidget {
                     color: AppColors.primaryLight,
                     shape: BoxShape.circle,
                     border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.35)),
+                      color: AppColors.primary.withValues(alpha: 0.35),
+                    ),
                   ),
-                  child: const Icon(Icons.add_rounded,
-                      color: AppColors.primary, size: 24),
+                  child: const Icon(
+                    Icons.add_rounded,
+                    color: AppColors.primary,
+                    size: 24,
+                  ),
                 ),
               ),
             ),
@@ -1024,7 +1074,9 @@ class _ControlTile extends StatelessWidget {
           onTap: onTap,
           child: Padding(
             padding: const EdgeInsets.symmetric(
-                horizontal: AppSpacing.sm, vertical: AppSpacing.md),
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.md,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1046,40 +1098,52 @@ class _ControlTile extends StatelessWidget {
                   child: Icon(icon, color: color, size: 23),
                 ),
                 const SizedBox(height: AppSpacing.sm),
-                Text(title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w700, fontSize: 13.5)),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13.5,
+                  ),
+                ),
                 const SizedBox(height: 3),
                 // The live badge replaces the subtitle rather than adding a
                 // line, so all three tiles stay the same height.
                 if (badge != null)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 3),
+                      horizontal: 7,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: badgeColor.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(AppRadius.pill),
                     ),
-                    child: Text(badge!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: badgeColor,
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.4,
-                        )),
-                  )
-                else
-                  Text(subtitle,
+                    child: Text(
+                      badge!,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                          color: AppColors.textMuted, fontSize: 11)),
+                      style: TextStyle(
+                        color: badgeColor,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                  )
+                else
+                  Text(
+                    subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 11,
+                    ),
+                  ),
               ],
             ),
           ),

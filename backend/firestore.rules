@@ -187,6 +187,16 @@ service cloud.firestore {
         && request.resource.data.deviceUid == request.auth.uid;
     }
 
+    // Every registered device of this child, not just the one holding the
+    // pairing slot: they all report their own state into the profile's
+    // `devices` map. Registration already proves this uid was paired to this
+    // child, and it must not be able to take the slot from another device.
+    function isChildDevice(familyId, childId) {
+      return isDeviceOfChild(familyId, childId)
+        && request.resource.data.get('deviceUid', '')
+             == resource.data.get('deviceUid', '');
+    }
+
     // Collection-group read of every child, for the site admin only. Parents
     // are isolated per family and must never be able to query across families,
     // so no org-admin access here.
@@ -250,12 +260,14 @@ service cloud.firestore {
       match /children/{childId} {
         allow read: if isAdmin()
           || isParentOf(familyId)
-          || (isSignedIn() && resource.data.deviceUid == request.auth.uid);
+          || (isSignedIn() && resource.data.deviceUid == request.auth.uid)
+          || isDeviceOfChild(familyId, childId);
         // Only THIS family's editors. `canEdit()` alone let any editing org
         // admin write any family's children.
         allow write: if (isParentOf(familyId) && canEdit())
           || isAdmin()
           || isBoundDevice()
+          || isChildDevice(familyId, childId)
           || isPairingClaim(familyId, childId);
 
         // Per-child subtree (usage, location, geofences, installed apps, ...).

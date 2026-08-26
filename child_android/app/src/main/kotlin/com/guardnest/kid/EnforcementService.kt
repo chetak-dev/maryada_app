@@ -116,7 +116,7 @@ class EnforcementService : Service() {
         attachContentFilterListener()
         attachWebPolicyListener()
         attachChildDocListener()
-        attachDeviceDocListener()
+        attachReportingListener()
         registerPackageChanges()
         DeviceLockdown.applyTamperProtection(this)
         reportInstalledApps()
@@ -218,6 +218,15 @@ class EnforcementService : Service() {
                         unpair()
                         return@addSnapshotListener
                     }
+                    // The parent removed this installation. Their revoke marks
+                    // our entry in the profile's devices map.
+                    val uid = FirebaseAuth.getInstance().currentUser?.uid
+                    if (uid != null &&
+                        snap?.get("devices.$uid.revoked") == true
+                    ) {
+                        unpair()
+                        return@addSnapshotListener
+                    }
                     // A site-admin wipe stamps the child doc. Honour it locally:
                     // drop buffered history and the chat dedup set, so on-screen
                     // chats are re-captured and deleted history isn't resurrected
@@ -278,28 +287,6 @@ class EnforcementService : Service() {
         }
     }
 
-    /** Watches this installation's device record for a parent revocation. */
-    private fun attachDeviceDocListener() {
-        val familyId = ChildStore.familyId(this) ?: return
-        val childId = ChildStore.childId(this) ?: return
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
-        track(
-            FirebaseFirestore.getInstance()
-                .collection("families").document(familyId)
-                .collection("children").document(childId)
-                .collection("devices").document(uid)
-                .addSnapshotListener { snap, e ->
-                    if (e != null) {
-                        Diag.warn(this, "deviceDocListener", e)
-                        return@addSnapshotListener
-                    }
-                    if (snap?.exists() == true && snap.getBoolean("revoked") == true) {
-                        unpair()
-                    }
-                }
-        )
-    }
-
     /** Clears local pairing, stops the filter, and shuts the service down. */
     private fun unpair() {
         handler.removeCallbacks(tick)
@@ -343,6 +330,30 @@ class EnforcementService : Service() {
         )
     }
 
+    /** Follows the heartbeat cadence the parent derives from the family size. */
+    private fun attachReportingListener() {
+        heartbeatMs = ChildStore.heartbeatMs(this, DEFAULT_HEARTBEAT_MS)
+            .coerceIn(MIN_HEARTBEAT_MS, MAX_HEARTBEAT_MS)
+        val familyId = ChildStore.familyId(this) ?: return
+        track(
+            FirebaseFirestore.getInstance()
+                .collection("families").document(familyId)
+                .collection("rules").document("reporting")
+                .addSnapshotListener { snap, e ->
+                    if (e != null) {
+                        Diag.warn(this, "reportingListener", e)
+                        return@addSnapshotListener
+                    }
+                    val published = (snap?.get("heartbeatMs") as? Number)?.toLong()
+                        ?: return@addSnapshotListener
+                    val next = published.coerceIn(MIN_HEARTBEAT_MS, MAX_HEARTBEAT_MS)
+                    if (next == heartbeatMs) return@addSnapshotListener
+                    heartbeatMs = next
+                    ChildStore.setHeartbeatMs(this, next)
+                }
+        )
+    }
+
     private fun enforce() {
         val lock = ScreenGuard.shouldLock(
             rule.paused, rule.bedtimeEnabled, rule.bedtimeStart, rule.bedtimeEnd
@@ -366,10 +377,19 @@ class EnforcementService : Service() {
     }
 
     private var lastHeartbeat = 0L
+
+    /**
+     * How often to report being alive. The parent derives this from how many
+     * profiles share the family's daily write allowance, so a small household
+     * gets a fresh screen and a large one still fits inside the free tier.
+     */
+    @Volatile
+    private var heartbeatMs = DEFAULT_HEARTBEAT_MS
+
     /** Periodically tells the parent this device is online (throttled). */
     private fun heartbeat() {
         val now = System.currentTimeMillis()
-        if (now - lastHeartbeat < HEARTBEAT_MS) return
+        if (now - lastHeartbeat < heartbeatMs) return
         lastHeartbeat = now
         val familyId = ChildStore.familyId(this) ?: return
         val childId = ChildStore.childId(this) ?: return
@@ -413,6 +433,13 @@ class EnforcementService : Service() {
             payload["locationUpdatedAt"] = FieldValue.serverTimestamp()
             fixAddress?.let { payload["address"] = it }
         }
+        // This device's own copy, under its uid, so a profile can hold several
+        // devices without them overwriting each other's state. It rides in the
+        // same write as the profile fields: a merge only touches `devices.<uid>`,
+        // so one heartbeat is one write instead of two.
+        deviceRecord(payload)?.let { (uid, record) ->
+            payload["devices"] = mapOf(uid to record)
+        }
         FirebaseFirestore.getInstance()
             .collection("families").document(familyId)
             .collection("children").document(childId)
@@ -433,33 +460,21 @@ class EnforcementService : Service() {
                     Diag.warn(this, "heartbeat", e)
                 }
             }
-        reportDeviceRecord(familyId, childId, payload)
     }
 
     /**
-     * Mirrors this device's state into `children/{id}/devices/{uid}`, so a child
-     * can be a profile with more than one device rather than being one device.
-     * Written alongside the fields on the child doc, which stay authoritative
-     * until every device reports here.
+     * This device's entry for the profile's `devices` map: the heartbeat fields
+     * plus what identifies the machine. Null before the device has signed in.
      */
-    private fun reportDeviceRecord(
-        familyId: String,
-        childId: String,
-        payload: Map<String, Any?>,
-    ) {
-        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return
+    private fun deviceRecord(payload: Map<String, Any?>): Pair<String, Map<String, Any?>>? {
+        val uid = FirebaseAuth.getInstance().currentUser?.uid ?: return null
         val record = payload.toMutableMap()
         record["platform"] = "android"
         record["deviceUid"] = uid
         record["deviceModel"] = "${Build.MANUFACTURER} ${Build.MODEL}"
         val displayName = ChildStore.deviceName(this)
         if (displayName.isNotEmpty()) record["displayName"] = displayName
-        FirebaseFirestore.getInstance()
-            .collection("families").document(familyId)
-            .collection("children").document(childId)
-            .collection("devices").document(uid)
-            .set(record, SetOptions.merge())
-            .addOnFailureListener { Diag.warn(this, "deviceRecord", it) }
+        return uid to record
     }
 
     /** Live grant state of each required protection (true == granted). */
@@ -1663,7 +1678,16 @@ class EnforcementService : Service() {
         // 20,000 a day for the WHOLE family. At 50 children that is a budget of
         // 400 writes per device per day, so nothing here reports on a timer
         // unless it has something new to say.
-        private const val HEARTBEAT_MS = 1_200_000L // 20 min
+        //
+        // The heartbeat is the exception: the parent publishes an interval
+        // derived from the profile count (see rules/reporting), and this is
+        // only the fallback for a device that has not read one yet.
+        private const val DEFAULT_HEARTBEAT_MS = 1_200_000L // 20 min
+        // A published value is still clamped: too small would burn the family's
+        // whole allowance, and past an hour of silence the parent would start
+        // calling a healthy phone "not reporting".
+        private const val MIN_HEARTBEAT_MS = 300_000L // 5 min
+        private const val MAX_HEARTBEAT_MS = 1_800_000L // 30 min
         private const val LOCATION_MS = 300_000L
         private const val LOCATION_HISTORY_MS = 1_800_000L
         // A new place must be at least this far from the last one recorded, and

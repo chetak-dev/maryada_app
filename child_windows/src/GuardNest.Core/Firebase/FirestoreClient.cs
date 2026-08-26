@@ -80,8 +80,10 @@ public sealed class FirestoreClient
         string path,
         IReadOnlyDictionary<string, object?> fields,
         CancellationToken ct,
-        IReadOnlyCollection<string>? serverTimestamps = null) =>
-        CommitAsync(new[] { new FirestoreWrite(path, fields, serverTimestamps) }, ct);
+        IReadOnlyCollection<string>? serverTimestamps = null,
+        IReadOnlyCollection<string>? maskPaths = null) =>
+        CommitAsync(
+            new[] { new FirestoreWrite(path, fields, serverTimestamps, maskPaths) }, ct);
 
     /// <summary>
     /// Applies writes atomically. Everything goes through commit because a plain
@@ -104,7 +106,7 @@ public sealed class FirestoreClient
         foreach (var write in writes)
         {
             var mask = new JsonArray();
-            foreach (var key in write.Fields.Keys) mask.Add(key);
+            foreach (var key in write.MaskPaths ?? write.Fields.Keys.ToList()) mask.Add(key);
 
             var entry = new JsonObject
             {

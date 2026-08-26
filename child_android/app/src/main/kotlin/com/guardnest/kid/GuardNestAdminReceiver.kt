@@ -45,9 +45,8 @@ class GuardNestAdminReceiver : DeviceAdminReceiver() {
             .collection("families").document(familyId)
             .collection("children").document(childId)
         try {
-            child.collection("devices").document(uid)
-                .set(payload, SetOptions.merge())
-            child.set(payload, SetOptions.merge())
+            child.set(payload + mapOf("devices" to mapOf(uid to payload)),
+                SetOptions.merge())
         } catch (e: Exception) {
             Diag.warn(ctx, "adminMark", e)
         }

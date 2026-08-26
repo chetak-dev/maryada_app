@@ -56,6 +56,10 @@ object ChildStore {
     // The last parent-triggered sync this device has already acted on.
     private const val KEY_SYNC_REQUESTED = "syncRequestedAt"
 
+    // Heartbeat interval the family last published, so a restart keeps the
+    // agreed cadence instead of falling back to the default for a cycle.
+    private const val KEY_HEARTBEAT_MS = "heartbeatMs"
+
     // A place the child has arrived at but not yet stayed long enough for it to
     // count as a visit.
     private const val KEY_PENDING_LAT = "pendingLat"
@@ -145,6 +149,14 @@ object ChildStore {
 
     fun setSyncRequestedAt(ctx: Context, at: Long) {
         prefs(ctx).edit().putLong(KEY_SYNC_REQUESTED, at).apply()
+    }
+
+    /** Published heartbeat interval, or [fallback] before one has arrived. */
+    fun heartbeatMs(ctx: Context, fallback: Long): Long =
+        prefs(ctx).getLong(KEY_HEARTBEAT_MS, fallback)
+
+    fun setHeartbeatMs(ctx: Context, ms: Long) {
+        prefs(ctx).edit().putLong(KEY_HEARTBEAT_MS, ms).apply()
     }
 
     /** Candidate place awaiting a dwell, or null when the child is settled. */

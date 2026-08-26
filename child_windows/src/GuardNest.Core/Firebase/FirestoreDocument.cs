@@ -35,7 +35,12 @@ public sealed class FirestoreDocument
 }
 
 /// <summary>A single document write in a commit.</summary>
+/// <param name="MaskPaths">
+/// The exact field paths to write, for reaching inside a map ("devices.abc.online").
+/// Defaults to the top-level keys of <paramref name="Fields"/>.
+/// </param>
 public sealed record FirestoreWrite(
     string Path,
     IReadOnlyDictionary<string, object?> Fields,
-    IReadOnlyCollection<string>? ServerTimestamps = null);
+    IReadOnlyCollection<string>? ServerTimestamps = null,
+    IReadOnlyCollection<string>? MaskPaths = null);
