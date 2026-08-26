@@ -19,7 +19,13 @@ object AlertLog {
     private val lock = Any()
     private const val THROTTLE_MS = 60_000L
 
-    fun log(ctx: Context, type: String, detail: String, throttleKey: String? = null) {
+    fun log(
+        ctx: Context,
+        type: String,
+        detail: String,
+        throttleKey: String? = null,
+        category: String? = null,
+    ) {
         val fid = ChildStore.familyId(ctx) ?: return
         val cid = ChildStore.childId(ctx) ?: return
         if (throttleKey != null) {
@@ -41,6 +47,9 @@ object AlertLog {
                         "childId" to cid,
                         // Which of the child's devices raised it.
                         "deviceName" to ChildStore.deviceName(ctx),
+                        // What kind of unsafe content, when it is known, so the
+                        // parent can filter rather than read every line.
+                        "category" to category,
                         "at" to FieldValue.serverTimestamp(),
                     )
                 )

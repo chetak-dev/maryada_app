@@ -150,6 +150,7 @@ class GuardNestNotificationListener : NotificationListenerService() {
             lastTickAt = System.currentTimeMillis()
             lastPosition = -1L
             YoutubeStore.record(t, ch, dur, 0L)
+            ContentWatch.video(this, t, ch)
         } else {
             if (ch.isNotEmpty() && ch != channel) channel = ch
             if (dur > 0L && dur != durationMs) durationMs = dur

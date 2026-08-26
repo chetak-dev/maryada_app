@@ -9,9 +9,9 @@ import '../../theme/tokens.dart';
 import '../../widgets/profile_button.dart';
 import '../../widgets/theme_toggle_button.dart';
 
-/// Recent notable events — only a blocked website visit or an app-tampering /
-/// removal attempt. Alerts are grouped under each child (collapsed by default).
-/// Shows real alerts from the live `families/{id}/alerts` feed only.
+/// Recent notable events — a blocked website, or unsafe content the child met
+/// in a chat or a video. Shown newest-first across the whole family, filterable
+/// by kind. Shows real alerts from the live `families/{id}/alerts` feed only.
 class AlertsScreen extends StatelessWidget {
   const AlertsScreen({super.key, this.uid});
 
@@ -70,7 +70,7 @@ class _LiveAlerts extends StatelessWidget {
                         a.type != AlertType.unknown && a.type != AlertType.tamper)
                     .toList();
                 if (relevant.isEmpty) return _EmptyAlerts();
-                return _GroupedAlerts(
+                return _AlertFeed(
                   alerts: relevant,
                   nameFor: (id) => names[id] ?? 'Device',
                 );
@@ -83,109 +83,221 @@ class _LiveAlerts extends StatelessWidget {
   }
 }
 
-/// Renders alerts grouped under each child's name, children ordered by their
-/// most recent alert (the incoming list is newest-first).
-class _GroupedAlerts extends StatelessWidget {
-  const _GroupedAlerts({required this.alerts, required this.nameFor});
+/// What the feed is narrowed to. Alerts are worth acting on in different ways —
+/// a blocked site is handled, a message the child actually received is not.
+enum _Filter { all, websites, messages, videos }
+
+extension on _Filter {
+  String get label => switch (this) {
+    _Filter.all => 'All',
+    _Filter.websites => 'Websites',
+    _Filter.messages => 'Messages',
+    _Filter.videos => 'Videos',
+  };
+
+  bool matches(Alert a) => switch (this) {
+    _Filter.all => true,
+    _Filter.websites => a.type == AlertType.blockedWebsite,
+    _Filter.messages => a.type == AlertType.unsafeMessage,
+    _Filter.videos => a.type == AlertType.unsafeVideo,
+  };
+}
+
+/// A flat, newest-first feed across the whole family.
+///
+/// These used to be collapsed under one card per child, so nothing at all was
+/// visible until a parent tapped a name — and with fifty profiles the newest
+/// alert could be several taps deep. Time order is what matters here; the
+/// child's name rides on each row instead.
+class _AlertFeed extends StatefulWidget {
+  const _AlertFeed({required this.alerts, required this.nameFor});
   final List<Alert> alerts;
   final String Function(String childId) nameFor;
 
   @override
+  State<_AlertFeed> createState() => _AlertFeedState();
+}
+
+class _AlertFeedState extends State<_AlertFeed> {
+  _Filter _filter = _Filter.all;
+
+  int _countFor(_Filter f) => widget.alerts.where(f.matches).length;
+
+  @override
   Widget build(BuildContext context) {
-    final order = <String>[];
-    final byChild = <String, List<Alert>>{};
-    for (final a in alerts) {
-      byChild.putIfAbsent(a.childId, () {
-        order.add(a.childId);
-        return <Alert>[];
-      }).add(a);
-    }
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(
-          AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
+    final visible = widget.alerts.where(_filter.matches).toList();
+    return Column(
       children: [
-        for (final childId in order) ...[
-          _ChildAlertsCard(
-            name: nameFor(childId),
-            alerts: byChild[childId]!,
+        SizedBox(
+          height: 44,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+            children: [
+              for (final f in _Filter.values)
+                Padding(
+                  padding: const EdgeInsets.only(right: AppSpacing.sm),
+                  child: FilterChip(
+                    label: Text('${f.label} (${_countFor(f)})'),
+                    selected: _filter == f,
+                    onSelected: (_) => setState(() => _filter = f),
+                  ),
+                ),
+            ],
           ),
-          const SizedBox(height: AppSpacing.sm),
-        ],
+        ),
+        Expanded(
+          child: visible.isEmpty
+              ? _EmptyAlerts()
+              : ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(
+                    AppSpacing.md,
+                    AppSpacing.sm,
+                    AppSpacing.md,
+                    AppSpacing.xxl,
+                  ),
+                  itemCount: visible.length,
+                  separatorBuilder: (_, _) =>
+                      const SizedBox(height: AppSpacing.sm),
+                  itemBuilder: (_, i) => _AlertCard(
+                    alert: visible[i],
+                    childName: widget.nameFor(visible[i].childId),
+                  ),
+                ),
+        ),
       ],
     );
   }
 }
 
-/// One child's alerts as a collapsible card (collapsed by default).
-class _ChildAlertsCard extends StatelessWidget {
-  const _ChildAlertsCard({required this.name, required this.alerts});
-  final String name;
-  final List<Alert> alerts;
+class _AlertCard extends StatelessWidget {
+  const _AlertCard({required this.alert, required this.childName});
+  final Alert alert;
+  final String childName;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          tilePadding:
-              const EdgeInsets.symmetric(horizontal: AppSpacing.md),
-          childrenPadding: const EdgeInsets.only(
-              left: AppSpacing.md, right: AppSpacing.md, bottom: AppSpacing.sm),
-          leading: Container(
+    final color = alert.type.color;
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceOf(context),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: AppColors.borderOf(context)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.12),
+              color: color.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(AppRadius.md),
             ),
-            child:
-                const Icon(Icons.person_rounded, color: AppColors.primary),
+            child: Icon(alert.type.icon, color: color, size: 20),
           ),
-          title: Text(name,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w700)),
-          subtitle: Text(
-            '${alerts.length} alert${alerts.length == 1 ? '' : 's'}',
-            style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        childName,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Text(
+                      alert.timeAgo,
+                      style: const TextStyle(
+                        color: AppColors.textMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Wrap(
+                  spacing: AppSpacing.xs,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    _Pill(
+                      text: alert.type.label,
+                      color: color,
+                      // Only say "blocked" when it actually was.
+                      icon: alert.type.wasBlocked
+                          ? Icons.block_rounded
+                          : Icons.visibility_rounded,
+                    ),
+                    if (alert.category.isNotEmpty)
+                      _Pill(text: alert.category, color: AppColors.textMuted),
+                  ],
+                ),
+                if (alert.detail.isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Text(
+                    alert.detail,
+                    style: TextStyle(
+                      color: AppColors.textSecondaryOf(context),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+                if (alert.deviceName.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    alert.deviceName,
+                    style: const TextStyle(
+                      color: AppColors.textMuted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
-          children: [
-            for (final a in alerts) _AlertRow(alert: a),
-          ],
-        ),
+        ],
       ),
     );
   }
 }
 
-class _AlertRow extends StatelessWidget {
-  const _AlertRow({required this.alert});
-  final Alert alert;
+class _Pill extends StatelessWidget {
+  const _Pill({required this.text, required this.color, this.icon});
+  final String text;
+  final Color color;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
-    // Profile groups the card; the row names the exact device that reported.
-    final meta = [
-      if (alert.detail.isNotEmpty) alert.detail,
-      if (alert.deviceName.isNotEmpty) 'Device: ${alert.deviceName}',
-    ].join('\n');
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: alert.type.color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(AppRadius.md),
-        ),
-        child: Icon(alert.type.icon, color: alert.type.color, size: 20),
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
       ),
-      title: Text(alert.type.label,
-          style: const TextStyle(fontWeight: FontWeight.w600)),
-      subtitle: meta.isEmpty ? null : Text(meta),
-      trailing: Text(alert.timeAgo,
-          style: const TextStyle(color: AppColors.textMuted, fontSize: 12)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            text,
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

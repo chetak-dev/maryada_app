@@ -471,6 +471,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (channel.isNotBlank()) lastYtChannel = channel
         lastYtTickAt = now
         YoutubeStore.record(title, channel, addMs)
+        ContentWatch.video(this, title, channel)
     }
 
     /**
@@ -825,6 +826,9 @@ class GuardNestAccessibilityService : AccessibilityService() {
                     appLabel(pkg), chatName, text, outgoing, timeLabel, number,
                     currentDay, occurrence,
                 )
+                ContentWatch.message(
+                    this, appLabel(pkg), chatName, text, outgoing == true,
+                )
             }
         } catch (e: Exception) {
             Diag.warn(this, "captureChatText", e)
@@ -1122,7 +1126,12 @@ class GuardNestAccessibilityService : AccessibilityService() {
                     for (block in result.textBlocks) {
                         for (line in block.lines) {
                             val text = line.text.trim()
-                            if (isMessageLine(text)) MessageStore.record(app, chatName, text)
+                            if (isMessageLine(text)) {
+                                MessageStore.record(app, chatName, text)
+                                ContentWatch.message(
+                                    this, app, chatName, text, false,
+                                )
+                            }
                         }
                     }
                     bmp.recycle()
@@ -1473,18 +1482,16 @@ class GuardNestAccessibilityService : AccessibilityService() {
         // Prefer a real category over "the parent listed it", so a gambling site
         // reads as Gambling however it was caught.
         val brandCategory = brandHit?.let { ContentFilter.categoryOf(it) }
-        WebHistoryStore.recordBlocked(
-            host,
-            when {
-                youtubeWeb -> WebFilter.REASON_YOUTUBE
-                filterReason != null &&
-                    filterReason != WebFilter.REASON_BLOCKLIST -> filterReason
-                brandCategory != null -> brandCategory
-                else -> WebFilter.categoryHint(host)
-                    ?: filterReason
-                    ?: WebFilter.REASON_KEYWORD
-            },
-        )
+        val category = when {
+            youtubeWeb -> WebFilter.REASON_YOUTUBE
+            filterReason != null &&
+                filterReason != WebFilter.REASON_BLOCKLIST -> filterReason
+            brandCategory != null -> brandCategory
+            else -> WebFilter.categoryHint(host)
+                ?: filterReason
+                ?: WebFilter.REASON_KEYWORD
+        }
+        WebHistoryStore.recordBlocked(host, category)
         val reason = when {
             youtubeWeb -> "YouTube is only allowed in the app"
             brandHit != null -> "matched \u201C$brandHit\u201D"
@@ -1494,6 +1501,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
             this, "blockedWebsite",
             "Blocked $host ($reason)",
             throttleKey = "site:$host",
+            category = category,
         )
     }
 
@@ -1571,19 +1579,18 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
         val matched = hit ?: return
         val host = hostOf(readAnyBrowserAddress(ForegroundApp.packageName) ?: "")
+        val category = ContentFilter.categoryOf(matched)
+            ?: WebFilter.categoryHint(host ?: "")
+            ?: WebFilter.REASON_CONTENT
         showBlockPage(host, "Hare Krishna, this website may not be safe for you")
         if (host != null) {
-            WebHistoryStore.recordBlocked(
-                host,
-                ContentFilter.categoryOf(matched)
-                    ?: WebFilter.categoryHint(host)
-                    ?: WebFilter.REASON_CONTENT,
-            )
+            WebHistoryStore.recordBlocked(host, category)
         }
         AlertLog.log(
             this, "blockedWebsite",
             "Blocked ${host ?: "a page"} (unsafe content: \u201C$matched\u201D)",
             throttleKey = "content:${host ?: matched}",
+            category = category,
         )
     }
 
@@ -1695,17 +1702,16 @@ class GuardNestAccessibilityService : AccessibilityService() {
         // Only block a real loaded page — not the search bar / suggestions (no
         // host) and not search-engine result pages (they only list links).
         if (host == null || WebFilter.isSearchEngine(host)) return
+        val category = ContentFilter.categoryOf(matched)
+            ?: WebFilter.categoryHint(host)
+            ?: WebFilter.REASON_CONTENT
         showBlockPage(host, "Hare Krishna, this website may not be safe for you")
-        WebHistoryStore.recordBlocked(
-            host,
-            ContentFilter.categoryOf(matched)
-                ?: WebFilter.categoryHint(host)
-                ?: WebFilter.REASON_CONTENT,
-        )
+        WebHistoryStore.recordBlocked(host, category)
         AlertLog.log(
             this, "blockedWebsite",
             "Blocked $host (unsafe content: \u201C$matched\u201D)",
             throttleKey = "content:$host",
+            category = category,
         )
     }
 

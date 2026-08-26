@@ -194,4 +194,52 @@ object ContentFilter {
         }
         return null
     }
+
+    /**
+     * Like [match], but every term must sit on a word boundary.
+     *
+     * For chat messages and video titles. A page has enough text that a
+     * substring hit is a fair signal; a one-line message does not, and there
+     * the cost of being wrong is not a page the child can navigate away from
+     * but a false accusation about them. "ass" inside "class" must not report a
+     * child to their parent.
+     */
+    fun matchWords(textLower: String): String? {
+        if (textLower.isBlank()) return null
+
+        for (w in parentKeywords) {
+            if (w.length >= 3 && containsWord(textLower, w)) return w
+        }
+        for (w in backendKeywords) {
+            if (w.length >= 3 && containsWord(textLower, w)) return w
+        }
+        for (t in STRONG) {
+            if (containsWord(textLower, t)) return t
+        }
+
+        var count = 0
+        var first: String? = null
+        for (t in WEAK) {
+            if (containsWord(textLower, t)) {
+                if (first == null) first = t
+                count++
+                if (count >= WEAK_THRESHOLD) return first
+            }
+        }
+        return null
+    }
+
+    /** True when [term] appears in [text] flanked by non-alphanumerics. */
+    private fun containsWord(text: String, term: String): Boolean {
+        if (term.isEmpty()) return false
+        var i = text.indexOf(term)
+        while (i >= 0) {
+            val before = if (i == 0) ' ' else text[i - 1]
+            val end = i + term.length
+            val after = if (end >= text.length) ' ' else text[end]
+            if (!before.isLetterOrDigit() && !after.isLetterOrDigit()) return true
+            i = text.indexOf(term, i + 1)
+        }
+        return false
+    }
 }
