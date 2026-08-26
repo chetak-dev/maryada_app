@@ -503,7 +503,7 @@ class EnforcementService : Service() {
     private fun guardAccessibility() {
         if (!ChildStore.isPaired(this)) return
         if (!Permissions.hasAccessibility(this)) return
-        if (Permissions.accessibilityBound()) return
+        if (Permissions.accessibilityBound(this)) return
         if (ChildStore.tempAccess(this)) return
         // Silent repair when the install was granted WRITE_SECURE_SETTINGS at
         // provisioning; otherwise the grace period runs out and the lockbox

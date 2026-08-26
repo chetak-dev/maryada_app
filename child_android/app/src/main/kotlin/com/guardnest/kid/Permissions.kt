@@ -59,12 +59,47 @@ object Permissions {
      * Whether the granted service is actually connected. Granted but unbound
      * means no events are delivered, so blocking and capture are silently dead
      * and the child has to toggle it off and on again.
+     *
+     * The in-process reference alone is NOT proof of life. An OEM ROM can drop
+     * the binding without ever calling onUnbind/onDestroy, and our own
+     * foreground service keeps the process alive, so that reference then
+     * reports a dead service as healthy for as long as the phone stays on —
+     * telling the parent "Protected" while nothing at all is monitored. The
+     * system's own bound-service list is the authority; it is the same list
+     * `dumpsys accessibility` prints under "Bound services".
      */
-    fun accessibilityBound(): Boolean = AccessibilityController.service != null
+    fun accessibilityBound(ctx: Context): Boolean {
+        if (AccessibilityController.service == null) return false
+        // A platform that won't answer must not be read as "dead" — that would
+        // lock a child out of an untampered phone.
+        val system = systemSaysBound(ctx) ?: return true
+        if (!system) {
+            android.util.Log.w(
+                "Maryada",
+                "accessibility: in-process reference is stale, system reports unbound",
+            )
+        }
+        return system
+    }
+
+    /** Null when the platform declines to answer. */
+    private fun systemSaysBound(ctx: Context): Boolean? = try {
+        val am = ctx.getSystemService(Context.ACCESSIBILITY_SERVICE)
+            as android.view.accessibility.AccessibilityManager
+        val mine = ComponentName(ctx, GuardNestAccessibilityService::class.java)
+        am.getEnabledAccessibilityServiceList(
+            android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK
+        )?.any { info ->
+            val s = info.resolveInfo?.serviceInfo
+            s != null && ComponentName(s.packageName, s.name) == mine
+        }
+    } catch (_: Exception) {
+        null
+    }
 
     /** Granted, but not delivering events — needs re-enabling in Settings. */
     fun accessibilityStalled(ctx: Context): Boolean =
-        hasAccessibility(ctx) && !accessibilityBound()
+        hasAccessibility(ctx) && !accessibilityBound(ctx)
 
     /**
      * How long a granted-but-dead accessibility service is tolerated before the
@@ -90,7 +125,7 @@ object Permissions {
     fun accessibilityOk(ctx: Context): Boolean {
         if (!hasAccessibility(ctx)) return false
         val stalledSince = ChildStore.accessibilityStallSince(ctx)
-        if (accessibilityBound()) {
+        if (accessibilityBound(ctx)) {
             if (stalledSince != 0L) ChildStore.setAccessibilityStallSince(ctx, 0L)
             return true
         }
