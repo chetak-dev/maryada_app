@@ -56,3 +56,10 @@ node_modules/
 
 # ============ Logs ============
 *.log
+
+# ============ Release binaries ============
+# Installers live on GitHub Releases, not in the repo. apk_host only hosts them.
+apk_host/public/*.bin
+apk_host/public/*.apk
+apk_host/public/*.exe
+*.apk
