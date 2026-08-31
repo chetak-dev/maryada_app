@@ -91,6 +91,22 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
     return out;
   }
 
+  /// Whether this profile already has a live device by this name.
+  ///
+  /// Only within the profile: two children may each have a phone called
+  /// "Tablet", but one child with two devices under the same name leaves the
+  /// parent no way to tell which one an alert or a removal refers to.
+  static bool _nameTaken(Map<String, dynamic>? child, String name) {
+    final wanted = name.trim().toLowerCase();
+    if (wanted.isEmpty) return false;
+    final devices = child?['devices'];
+    if (devices is! Map) return false;
+    return devices.values.any((d) {
+      if (d is! Map || d['revoked'] == true) return false;
+      return (d['displayName'] ?? '').toString().trim().toLowerCase() == wanted;
+    });
+  }
+
   /// The admin's limit counts paired devices across the family — profiles are
   /// free, devices are what's scarce. True (and explains itself) at the cap.
   Future<bool> _deviceLimitReached() async {
@@ -143,6 +159,15 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
           .doc(widget.child.id)
           .get();
       _devicesBefore = _activeDevices(before.data());
+      if (_nameTaken(before.data(), deviceName)) {
+        if (!mounted) return;
+        setState(() {
+          _busy = false;
+          _nameError = 'This profile already has a device called '
+              '"$deviceName". Give this one a different name.';
+        });
+        return;
+      }
       final code = await FamilyRepository.instance.generatePairingCode(
           familyId: widget.familyId,
           childId: widget.child.id,

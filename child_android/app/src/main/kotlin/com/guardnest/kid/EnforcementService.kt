@@ -700,35 +700,63 @@ class EnforcementService : Service() {
         return results[0]
     }
 
-    /** Turns coordinates into a short human-readable place name (best effort). */
+    /**
+     * Turns coordinates into a short human-readable place name (best effort).
+     *
+     * The lookup is a network call behind a system service, so it fails on a
+     * flaky connection. It used to give up on the first failure without a
+     * word, and because the history point is written straight afterwards that
+     * place stayed bare coordinates for good — so it is worth a few tries.
+     */
     private fun reverseGeocode(lat: Double, lng: Double): String? {
-        return try {
-            @Suppress("DEPRECATION")
-            val results = Geocoder(this, Locale.getDefault()).getFromLocation(lat, lng, 3)
-                ?: return null
-            // Prefer the result that yields real place words — the first one is
-            // often just a Plus Code ("34WG+P26") with no street or area.
-            for (addr in results) {
-                val feature = addr.featureName
-                    ?.takeUnless { isPlusCode(it) || it == addr.thoroughfare }
-                val parts = listOfNotNull(
-                    feature,
-                    addr.thoroughfare,
-                    addr.subLocality,
-                    addr.locality ?: addr.subAdminArea,
-                ).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-                if (parts.isNotEmpty()) return parts.take(3).joinToString(", ")
+        if (!Geocoder.isPresent()) return null
+        for (attempt in 0 until GEOCODE_ATTEMPTS) {
+            try {
+                @Suppress("DEPRECATION")
+                val results =
+                    Geocoder(this, Locale.getDefault()).getFromLocation(lat, lng, 3)
+                if (!results.isNullOrEmpty()) {
+                    placeNameOf(results)?.let { return it }
+                    return null // Answered, but with nothing worth showing.
+                }
+            } catch (e: Exception) {
+                // Not Diag.warn: a missed place name is not a device fault and
+                // must not raise the parent's "device hit an error" card.
+                android.util.Log.w("Maryada", "reverseGeocode attempt $attempt", e)
             }
-            val line = results.firstOrNull()?.getAddressLine(0) ?: return null
-            // Last resort: strip the leading Plus Code token from the full line
-            // ("34WG+P26 Hyderabad, Telangana" -> "Hyderabad, Telangana").
-            line.split(' ')
-                .dropWhile { isPlusCode(it.trim(',')) }
-                .joinToString(" ")
-                .ifBlank { line }
-        } catch (_: Exception) {
-            null
+            if (attempt < GEOCODE_ATTEMPTS - 1) {
+                try {
+                    Thread.sleep(GEOCODE_RETRY_MS)
+                } catch (_: InterruptedException) {
+                    return null
+                }
+            }
         }
+        return null
+    }
+
+    /** The most human of the returned addresses, or null if none reads as a place. */
+    private fun placeNameOf(results: List<android.location.Address>): String? {
+        // Prefer the result that yields real place words — the first one is
+        // often just a Plus Code ("34WG+P26") with no street or area.
+        for (addr in results) {
+            val feature = addr.featureName
+                ?.takeUnless { isPlusCode(it) || it == addr.thoroughfare }
+            val parts = listOfNotNull(
+                feature,
+                addr.thoroughfare,
+                addr.subLocality,
+                addr.locality ?: addr.subAdminArea,
+            ).map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+            if (parts.isNotEmpty()) return parts.take(3).joinToString(", ")
+        }
+        val line = results.firstOrNull()?.getAddressLine(0) ?: return null
+        // Last resort: strip the leading Plus Code token from the full line
+        // ("34WG+P26 Hyderabad, Telangana" -> "Hyderabad, Telangana").
+        return line.split(' ')
+            .dropWhile { isPlusCode(it.trim(',')) }
+            .joinToString(" ")
+            .ifBlank { line }
     }
 
     /** True for Open Location Codes like "34WG+P26" — not a place name. */
@@ -1699,6 +1727,10 @@ class EnforcementService : Service() {
         // Far enough that it is plainly a different place; recorded at once so
         // a journey isn't lost waiting for a dwell to confirm it.
         private const val HISTORY_TELEPORT_M = 3_000f
+        // A place name is a network call that fails on a flaky connection, and
+        // the history point is written immediately afterwards.
+        private const val GEOCODE_ATTEMPTS = 3
+        private const val GEOCODE_RETRY_MS = 1_500L
         private const val WEBHISTORY_MS = 300_000L
         private const val CALLS_MS = 300_000L
         private const val PERM_PROMPT_MS = 60_000L

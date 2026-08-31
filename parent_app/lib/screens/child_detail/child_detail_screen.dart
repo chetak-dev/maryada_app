@@ -987,6 +987,23 @@ class _DeviceList extends StatelessWidget {
     );
     focus.dispose();
     if (newName == null || newName.isEmpty || newName == device.label) return;
+    // Two devices on one profile sharing a name leaves no way to tell which an
+    // alert or a removal refers to.
+    final clash = devices.any(
+      (d) =>
+          d.id != device.id &&
+          d.label.trim().toLowerCase() == newName.toLowerCase(),
+    );
+    if (clash) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            'Another device on this profile is already called “$newName”.',
+          ),
+        ),
+      );
+      return;
+    }
     if (!context.mounted) return;
     if (!await Net.require(context)) return;
     try {
