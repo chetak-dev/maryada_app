@@ -471,7 +471,29 @@ class GuardNestAccessibilityService : AccessibilityService() {
         if (channel.isNotBlank()) lastYtChannel = channel
         lastYtTickAt = now
         YoutubeStore.record(title, channel, addMs)
+        // This is the on-screen path, so the child is actually looking at the
+        // video and can be taken off it. The media-session path in the
+        // notification listener only alerts: it also fires with the screen off
+        // or the app in the background, where bouncing would interrupt nothing
+        // the child is watching.
+        val unsafe = ContentFilter.matchWords(title.lowercase())
+        if (unsafe != null) {
+            blockVideo(title, unsafe)
+            return
+        }
         ContentWatch.video(this, title, channel)
+    }
+
+    /** Leaves an unsafe video and says why, the same way a blocked page does. */
+    private fun blockVideo(title: String, matched: String) {
+        val category = ContentFilter.categoryOf(matched) ?: WebFilter.REASON_CONTENT
+        showBlockPage(null, "Hare Krishna, this video may not be safe for you")
+        AlertLog.log(
+            this, "unsafeVideo",
+            "Blocked video (\u201C$matched\u201D): $title",
+            throttleKey = "video:$title",
+            category = category,
+        )
     }
 
     /**
