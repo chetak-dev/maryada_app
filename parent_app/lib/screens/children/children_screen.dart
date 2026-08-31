@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 
 import '../../data/db.dart';
 import '../../data/family_repository.dart';
+import '../../data/tags_repository.dart';
 import '../../models/child.dart';
 import '../../models/device.dart';
+import '../../models/tag.dart';
 import '../../screens/child_detail/child_detail_screen.dart';
 import '../../screens/children/new_profile_dialog.dart';
 import '../../theme/tokens.dart';
@@ -58,6 +60,12 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
   String _query = '';
   late ChildFilter _filter = widget.initialFilter;
 
+  // Null means "every tag". Tags come from the family, so one listener serves
+  // the whole page however many profiles there are.
+  String? _tagId;
+  List<FamilyTag> _tags = const [];
+  StreamSubscription<List<FamilyTag>>? _tagSub;
+
   // The list arrives from the caller so the page opens instantly, then follows
   // Firestore: creating or deleting a profile used to leave this page stale
   // until it was closed and reopened.
@@ -72,12 +80,26 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
         if (!mounted) return;
         setState(() => _kids = kids);
       });
+      final fid = widget.familyId;
+      if (fid != null && fid.isNotEmpty) {
+        _tagSub = TagsRepository.instance.watch(fid).listen((tags) {
+          if (!mounted) return;
+          setState(() {
+            _tags = tags;
+            // A tag the admin deleted must not keep filtering the list.
+            if (_tagId != null && !tags.any((t) => t.id == _tagId)) {
+              _tagId = null;
+            }
+          });
+        });
+      }
     }
   }
 
   @override
   void dispose() {
     _sub?.cancel();
+    _tagSub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -86,6 +108,7 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
     final q = _query.trim().toLowerCase();
     final out = _kids.where((k) {
       if (!_filter.matches(k.child, k.child.effectiveStatus)) return false;
+      if (_tagId != null && !k.child.tagIds.contains(_tagId)) return false;
       if (q.isEmpty) return true;
       return k.child.name.toLowerCase().contains(q);
     }).toList();
@@ -99,8 +122,23 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
     return out;
   }
 
-  int _countFor(ChildFilter f) =>
-      _kids.where((k) => f.matches(k.child, k.child.effectiveStatus)).length;
+  // Both filters count against each other, so "Needs attention" inside a tag
+  // reads honestly rather than showing the whole family's total.
+  int _countFor(ChildFilter f) => _kids
+      .where(
+        (k) =>
+            f.matches(k.child, k.child.effectiveStatus) &&
+            (_tagId == null || k.child.tagIds.contains(_tagId)),
+      )
+      .length;
+
+  int _countForTag(String? tagId) => _kids
+      .where(
+        (k) =>
+            _filter.matches(k.child, k.child.effectiveStatus) &&
+            (tagId == null || k.child.tagIds.contains(tagId)),
+      )
+      .length;
 
   void _newProfile(BuildContext context) {
     final fid = widget.familyId;
@@ -172,6 +210,41 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
               ],
             ),
           ),
+          // Only when the family has tags — an empty row of one dead chip is
+          // just clutter for a household that doesn't use them.
+          if (_tags.isNotEmpty)
+            SizedBox(
+              height: 42,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.md,
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: AppSpacing.sm),
+                    child: FilterChip(
+                      label: Text('All tags (${_countForTag(null)})'),
+                      selected: _tagId == null,
+                      onSelected: (_) => setState(() => _tagId = null),
+                    ),
+                  ),
+                  for (final t in _tags)
+                    Padding(
+                      padding: const EdgeInsets.only(right: AppSpacing.sm),
+                      child: FilterChip(
+                        avatar: CircleAvatar(
+                          backgroundColor: t.color,
+                          radius: 6,
+                        ),
+                        label: Text('${t.name} (${_countForTag(t.id)})'),
+                        selected: _tagId == t.id,
+                        onSelected: (_) => setState(() => _tagId = t.id),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           Expanded(
             child: visible.isEmpty
                 ? const Center(
@@ -198,6 +271,7 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
                       child: visible[i].child,
                       familyId: visible[i].familyId,
                       latestVersionCode: widget.latestVersionCode,
+                      tags: _tags,
                     ),
                   ),
           ),
@@ -215,6 +289,7 @@ class ProfileTile extends StatelessWidget {
     required this.child,
     this.familyId,
     this.latestVersionCode = 0,
+    this.tags = const [],
   });
 
   final Child child;
@@ -222,6 +297,9 @@ class ProfileTile extends StatelessWidget {
 
   /// The newest published build, for flagging devices that haven't taken it.
   final int latestVersionCode;
+
+  /// The family's tags, for turning this profile's tag ids into names.
+  final List<FamilyTag> tags;
 
   /// True when any linked device is still on an older build. Devices that have
   /// never reported a version are skipped rather than guessed at.
@@ -372,6 +450,12 @@ class ProfileTile extends StatelessWidget {
                                 label: 'Update pending',
                                 color: AppColors.warning,
                               ),
+                            // The groups this profile belongs to, so a filtered
+                            // list still says why each row is in it.
+                            for (final t in tags.where(
+                              (t) => child.tagIds.contains(t.id),
+                            ))
+                              _StatusPill(label: t.name, color: t.color),
                           ],
                         )
                       else

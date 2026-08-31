@@ -214,7 +214,13 @@ service cloud.firestore {
             && canEdit());
       allow update: if isSignedIn()
         && (
-          (request.auth.uid in resource.data.parentUids && canEdit())
+          isAdmin()
+          // A guardian may manage their household but NOT rename it: the family
+          // name identifies the household to the site admin who created it, and
+          // it is stamped onto pairing codes and child documents.
+          || (request.auth.uid in resource.data.parentUids
+              && canEdit()
+              && request.resource.data.name == resource.data.name)
           // A second guardian joining the household their grant named. They may
           // only add themselves, and only to that one family.
           || (isOrgAdmin()
@@ -255,6 +261,14 @@ service cloud.firestore {
         allow read: if isAdmin() || isParentOf(familyId)
           || isDeviceOfFamily(familyId);
         allow write: if isAdmin() || (isParentOf(familyId) && canEdit());
+      }
+
+      // Tags for grouping this family's profiles. The site admin owns the
+      // vocabulary; a guardian applies it by writing `tagIds` on a child, which
+      // the child branch below already governs.
+      match /tags/{tagId} {
+        allow read: if isAdmin() || isParentOf(familyId);
+        allow write: if isAdmin();
       }
 
       match /children/{childId} {

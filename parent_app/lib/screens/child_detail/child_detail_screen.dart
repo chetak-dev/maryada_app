@@ -6,8 +6,10 @@ import '../../data/app_update_repository.dart';
 import '../../data/db.dart';
 import '../../data/device_repository.dart';
 import '../../data/family_repository.dart';
+import '../../data/tags_repository.dart';
 import '../../models/child.dart';
 import '../../models/device.dart';
+import '../../models/tag.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/access_scope.dart';
 import '../../widgets/dialog_buttons.dart';
@@ -159,6 +161,12 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                   const SizedBox(height: AppSpacing.md),
                 ],
                 if (_live) ...[
+                  _TagsRow(
+                    familyId: familyId!,
+                    child: child,
+                    canEdit: canEdit,
+                  ),
+                  const SizedBox(height: AppSpacing.md),
                   Row(
                     children: [
                       Expanded(
@@ -172,7 +180,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                           onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (_) => PairDeviceScreen(
-                                familyId: familyId!,
+                                familyId: familyId,
                                 child: child,
                               ),
                             ),
@@ -184,7 +192,7 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                   ),
                   const SizedBox(height: AppSpacing.xs),
                   _DeviceList(
-                    familyId: familyId!,
+                    familyId: familyId,
                     childId: child.id,
                     devices: devices,
                     selectedId: _deviceId,
@@ -1084,8 +1092,7 @@ class _DeviceList extends StatelessWidget {
 }
 
 /// A device as a full-width card: its platform, the parent's name for it, its
-/// status and the version it is running. Every one of those is per device, so
-/// they must survive a profile that has several.
+/// status and the version it is running. Every one of those is per device, so/// they must survive a profile that has several.
 class _DeviceCard extends StatelessWidget {
   const _DeviceCard({
     required this.device,
@@ -1326,5 +1333,136 @@ class _FeatureTile extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// The groups this profile belongs to.
+///
+/// The site admin owns the vocabulary — a guardian can only choose from it,
+/// so a tag means the same thing on every profile in the household.
+class _TagsRow extends StatelessWidget {
+  const _TagsRow({
+    required this.familyId,
+    required this.child,
+    required this.canEdit,
+  });
+
+  final String familyId;
+  final Child child;
+  final bool canEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<FamilyTag>>(
+      stream: TagsRepository.instance.watch(familyId),
+      builder: (context, snap) {
+        final tags = snap.data ?? const <FamilyTag>[];
+        // Nothing to say until an admin has created some.
+        if (tags.isEmpty) return const SizedBox.shrink();
+        final mine = tags.where((t) => child.tagIds.contains(t.id)).toList();
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: mine.isEmpty
+                  ? Text(
+                      'No tags',
+                      style: TextStyle(
+                        color: AppColors.textSecondaryOf(context),
+                        fontSize: 13,
+                      ),
+                    )
+                  : Wrap(
+                      spacing: 6,
+                      runSpacing: 5,
+                      children: [
+                        for (final t in mine)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 9,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: t.color.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              t.name,
+                              style: TextStyle(
+                                color: t.color,
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
+            if (canEdit)
+              TextButton.icon(
+                onPressed: () => _pick(context, tags),
+                icon: const Icon(Icons.sell_outlined, size: 18),
+                label: Text(mine.isEmpty ? 'Add tags' : 'Edit'),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _pick(BuildContext context, List<FamilyTag> tags) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final chosen = Set<String>.from(child.tagIds);
+    final saved = await showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Tags'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final t in tags)
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: chosen.contains(t.id),
+                    onChanged: (v) => setState(() {
+                      if (v == true) {
+                        chosen.add(t.id);
+                      } else {
+                        chosen.remove(t.id);
+                      }
+                    }),
+                    secondary: CircleAvatar(
+                      backgroundColor: t.color,
+                      radius: 8,
+                    ),
+                    title: Text(t.name),
+                  ),
+              ],
+            ),
+          ),
+          actions: [
+            DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+            DialogConfirmButton(
+              onPressed: () => Navigator.pop(ctx, chosen),
+              label: 'Save',
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == null) return;
+    try {
+      await TagsRepository.instance.setChildTags(
+        familyId,
+        child.id,
+        saved.toList(),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Couldn\u2019t save tags — ${friendlyError(e)}')),
+      );
+    }
   }
 }

@@ -80,6 +80,9 @@ class Child {
   /// that must be true of the *profile* is worked out from this list.
   final List<Device> devices;
 
+  /// The family tags this profile wears, for grouping the list.
+  final List<String> tagIds;
+
   const Child({
     required this.id,
     required this.name,
@@ -101,6 +104,7 @@ class Child {
     this.lastError,
     this.lastErrorAt,
     this.devices = const [],
+    this.tagIds = const [],
   });
 
   /// A silent device is still worth surfacing, but as "last seen", never as the

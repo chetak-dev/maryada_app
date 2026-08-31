@@ -110,6 +110,20 @@ class FamilyRepository {
     return (children: kids.count ?? 0, devices: devices.count ?? 0);
   }
 
+  /// Site-admin rename. The name identifies the household to the admin who
+  /// created it and is stamped onto pairing codes and child documents, so the
+  /// rules refuse it from a guardian however the UI is reached.
+  Future<void> renameFamily(String familyId, String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) {
+      throw StateError('a family needs a name.');
+    }
+    return Db.families.doc(familyId).set(
+      {'name': trimmed},
+      SetOptions(merge: true),
+    );
+  }
+
   /// Site-admin delete of an **empty** family. Refused while any child profile
   /// or registered device is attached — those must be removed first, so a
   /// household can never be pulled out from under live monitoring.
@@ -361,6 +375,9 @@ class FamilyRepository {
       lastError: (map['lastError'] as String?),
       lastErrorAt: (map['lastErrorAt'] as Timestamp?)?.toDate(),
       devices: devices,
+      tagIds: (map['tagIds'] is List)
+          ? List<String>.from((map['tagIds'] as List).map((e) => '$e'))
+          : const [],
     );
   }
 

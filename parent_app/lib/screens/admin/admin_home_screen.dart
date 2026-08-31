@@ -18,6 +18,7 @@ import '../../data/retention_service.dart';
 import '../publish_update/publish_update_screen.dart';
 import 'clear_data_screen.dart';
 import 'content_keywords_screen.dart';
+import 'family_tags_screen.dart';
 import 'host_detail_screen.dart';
 import 'web_policy_screen.dart';
 
@@ -272,6 +273,40 @@ class _FamilyAdminCardState extends State<_FamilyAdminCard> {
 
   String _plural(int n, String one, String many) => '$n ${n == 1 ? one : many}';
 
+  Future<void> _rename() async {
+    final controller = TextEditingController(text: widget.family.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename family'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Family name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+          DialogConfirmButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            label: 'Save',
+          ),
+        ],
+      ),
+    );
+    if (newName == null || newName.isEmpty || newName == widget.family.name) {
+      return;
+    }
+    if (!mounted) return;
+    await _save(
+      context,
+      () => FamilyRepository.instance.renameFamily(widget.family.id, newName),
+      'Couldn\'t rename',
+      'Family renamed to "$newName".',
+    );
+  }
+
   Future<void> _delete() async {
     final load = await _load;
     if (!mounted) return;
@@ -355,6 +390,23 @@ class _FamilyAdminCardState extends State<_FamilyAdminCard> {
                   ),
                 ],
               ),
+            ),
+            IconButton(
+              tooltip: 'Tags',
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => FamilyTagsScreen(
+                    familyId: f.id,
+                    familyName: f.name.isEmpty ? 'Family' : f.name,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.sell_outlined),
+            ),
+            IconButton(
+              tooltip: 'Rename family',
+              onPressed: _rename,
+              icon: const Icon(Icons.edit_outlined),
             ),
             IconButton(
               tooltip: 'Delete family',
