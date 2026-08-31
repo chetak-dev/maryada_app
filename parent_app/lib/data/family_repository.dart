@@ -301,6 +301,10 @@ class FamilyRepository {
 
   // ---- Mapping -----------------------------------------------------------
 
+  @visibleForTesting
+  Child childFromMapForTest(String id, Map<String, dynamic> map) =>
+      _childFromDoc(id, map);
+
   Child _childFromDoc(String id, Map<String, dynamic> map) {
     final paired = map['paired'] == true;
     final permissionsOk = map['permissionsOk'] == true;
@@ -330,6 +334,10 @@ class FamilyRepository {
 
     double? d(dynamic v) => v is num ? v.toDouble() : null;
 
+    final seenAt = (map['lastSeenAt'] as Timestamp?)?.toDate();
+    var devices = devicesFromMap(map['devices'], seenAt);
+    if (devices.isEmpty) devices = _legacyDevice(map);
+
     return Child(
       id: id,
       name: (map['name'] ?? 'Child').toString(),
@@ -352,11 +360,34 @@ class FamilyRepository {
       appVersionName: (map['appVersionName'] as String?),
       lastError: (map['lastError'] as String?),
       lastErrorAt: (map['lastErrorAt'] as Timestamp?)?.toDate(),
-      devices: devicesFromMap(
-        map['devices'],
-        (map['lastSeenAt'] as Timestamp?)?.toDate(),
-      ),
+      devices: devices,
     );
+  }
+
+  /// The one device of a profile paired by a build that predates the `devices`
+  /// map, which writes only the (no longer read) subcollection.
+  ///
+  /// Without this such a device is invisible: it never appears on the profile,
+  /// the pairing screen never notices it linked, and the delete guard counts
+  /// zero devices and lets a live profile be deleted. The profile document is
+  /// stamped by every build ever shipped, so its own fields describe the device
+  /// well enough to stand in until it takes an update. Costs no extra read.
+  static List<Device> _legacyDevice(Map<String, dynamic> map) {
+    final uid = (map['deviceUid'] ?? '').toString();
+    if (uid.isEmpty || map['paired'] != true) return const [];
+    return [
+      Device.fromDoc(uid, {
+        'deviceModel': map['deviceModel'] ?? 'Device',
+        'lastSeenAt': map['lastSeenAt'],
+        'protections': map['protections'],
+        'permissionsOk': map['permissionsOk'],
+        'appVersionCode': map['appVersionCode'],
+        'appVersionName': map['appVersionName'],
+        'adminActive': map['adminActive'],
+        'lastError': map['lastError'],
+        'lastErrorAt': map['lastErrorAt'],
+      }),
+    ];
   }
 
   /// The profile's installations, each under its own device uid so they never

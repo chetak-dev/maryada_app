@@ -357,8 +357,11 @@ class ProfileTile extends StatelessWidget {
                                 icon: devices.length == 1
                                     ? devices.first.icon
                                     : Icons.devices_rounded,
+                                // One device needs no words — the mark says
+                                // which platform, and the name is on the
+                                // profile itself.
                                 label: devices.length == 1
-                                    ? devices.first.label
+                                    ? ''
                                     : '${devices.length} devices',
                               ),
                             // Rolling out an update is otherwise invisible:
@@ -456,20 +459,22 @@ class _MutedPill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, size: 11, color: AppColors.textSecondaryOf(context)),
-          const SizedBox(width: 4),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 130),
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: AppColors.textSecondaryOf(context),
-                fontSize: 10.5,
-                fontWeight: FontWeight.w700,
+          if (label.isNotEmpty) ...[
+            const SizedBox(width: 4),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 130),
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppColors.textSecondaryOf(context),
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );

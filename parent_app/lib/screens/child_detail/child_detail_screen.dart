@@ -1176,6 +1176,19 @@ class _DeviceCard extends StatelessWidget {
                               color: AppColors.textMuted,
                             ),
                           ),
+                        // Says how long the silence has lasted. Without it an
+                        // uninstalled phone and one quiet for ten minutes read
+                        // exactly the same.
+                        Text(
+                          device.lastSeenLabel,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: device.isSilent
+                                ? AppColors.warning
+                                : AppColors.textMuted,
+                          ),
+                        ),
                         // An OTA is otherwise invisible until it lands.
                         if (latestVersionCode > 0 &&
                             device.appVersionCode > 0 &&

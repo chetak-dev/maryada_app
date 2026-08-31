@@ -71,4 +71,60 @@ void main() {
       expect(FamilyRepository.devicesFromMap('nonsense'), isEmpty);
     });
   });
+
+  group('a profile paired by a build without the devices map', () {
+    // Such a build writes only the subcollection, which is no longer read, but
+    // it does stamp deviceUid on the profile. Without the fallback the device
+    // is invisible: the pairing screen never sees it link and the delete guard
+    // counts zero devices on a profile that is very much live.
+    Map<String, dynamic> legacyProfile({
+      bool paired = true,
+      String uid = 'olduid',
+    }) => {
+      'name': 'Aarav',
+      'paired': paired,
+      'setupComplete': true,
+      'deviceUid': uid,
+      'deviceModel': 'vivo I2011',
+      'permissionsOk': true,
+      'protections': {'accessibility': true},
+      'appVersionCode': 25,
+      'lastSeenAt': Timestamp.fromDate(fresh),
+    };
+
+    test('its device is recovered from the profile fields', () {
+      final child = FamilyRepository.instance.childFromMapForTest(
+        'c1',
+        legacyProfile(),
+      );
+      expect(child.devices, hasLength(1));
+      expect(child.devices.single.id, 'olduid');
+      expect(child.devices.single.deviceModel, 'vivo I2011');
+      expect(child.devices.single.appVersionCode, 25);
+    });
+
+    test('an unpaired profile recovers nothing', () {
+      final child = FamilyRepository.instance.childFromMapForTest(
+        'c1',
+        legacyProfile(paired: false),
+      );
+      expect(child.devices, isEmpty);
+    });
+
+    test('a profile with no bound device recovers nothing', () {
+      final child = FamilyRepository.instance.childFromMapForTest(
+        'c1',
+        legacyProfile(uid: ''),
+      );
+      expect(child.devices, isEmpty);
+    });
+
+    test('the real map wins when there is one', () {
+      final child = FamilyRepository.instance.childFromMapForTest('c1', {
+        ...legacyProfile(),
+        'devices': {'newuid': entry(model: 'Pixel', seenAt: fresh)},
+      });
+      expect(child.devices.single.id, 'newuid');
+    });
+  });
 }

@@ -214,6 +214,21 @@ class Device {
     return (name == null || name.isEmpty) ? '' : 'v$name';
   }
 
+  /// When this device was last heard from, in words.
+  ///
+  /// An uninstalled or switched-off device simply stops reporting, and the
+  /// status alone never said for how long — so a parent could not tell a phone
+  /// that went quiet ten minutes ago from one that has been gone a fortnight.
+  String get lastSeenLabel {
+    final at = lastSeenAt;
+    if (at == null) return 'Never reported';
+    final d = DateTime.now().difference(at);
+    if (d.inMinutes < 1) return 'Last seen just now';
+    if (d.inMinutes < 60) return 'Last seen ${d.inMinutes}m ago';
+    if (d.inHours < 24) return 'Last seen ${d.inHours}h ago';
+    return 'Last seen ${d.inDays}d ago';
+  }
+
   static Device fromDoc(
     String id,
     Map<String, dynamic> m, {

@@ -70,14 +70,25 @@ class _PairDeviceScreenState extends State<PairDeviceScreen> {
   }
 
   /// The uids of the installations on the profile that haven't been revoked.
+  ///
+  /// `deviceUid` is included because it is the one field EVERY build ever
+  /// shipped stamps at pairing. A device on a build that predates the `devices`
+  /// map writes only the subcollection, which is no longer read — without this
+  /// the screen would sit on the code forever while the child was already
+  /// linked and protected.
   static Set<String> _activeDevices(Map<String, dynamic>? child) {
+    final out = <String>{};
     final devices = child?['devices'];
-    if (devices is! Map) return const {};
-    return {
-      for (final e in devices.entries)
-        if (e.value is Map && (e.value as Map)['revoked'] != true)
-          e.key.toString(),
-    };
+    if (devices is Map) {
+      for (final e in devices.entries) {
+        if (e.value is Map && (e.value as Map)['revoked'] != true) {
+          out.add(e.key.toString());
+        }
+      }
+    }
+    final bound = (child?['deviceUid'] ?? '').toString();
+    if (bound.isNotEmpty) out.add(bound);
+    return out;
   }
 
   /// The admin's limit counts paired devices across the family — profiles are

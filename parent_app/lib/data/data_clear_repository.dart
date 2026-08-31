@@ -107,9 +107,18 @@ class DataClearRepository {
           }
         : const <String, Map<String, dynamic>>{};
     final active = devices.values.where((d) => d['revoked'] != true).length;
-    if (active > 0) {
+    // A device paired by a build that predates the `devices` map writes only
+    // the subcollection, so the map can be empty while an installation is very
+    // much alive. `deviceUid` is stamped by every build, and deleting the
+    // profile out from under it would leave it enforcing rules nobody can see.
+    final boundUid = (child.data()?['deviceUid'] ?? '').toString();
+    final legacyLive = active == 0 &&
+        boundUid.isNotEmpty &&
+        child.data()?['paired'] == true;
+    if (active > 0 || legacyLive) {
+      final count = active > 0 ? active : 1;
       throw StateError(
-          'This profile still has $active linked device(s). Remove them first.');
+          'This profile still has $count linked device(s). Remove them first.');
     }
 
     // Delete the profile first so connected installations immediately unpair.
