@@ -42,7 +42,8 @@ class DialogConfirmButton extends StatelessWidget {
     this.color,
   });
 
-  final VoidCallback onPressed;
+  /// Null disables the button, for dialogs that can't be submitted yet.
+  final VoidCallback? onPressed;
   final String label;
   final Color? color;
 

@@ -154,6 +154,13 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
       appBar: AppBar(
         title: Text('Profiles (${_kids.length})'),
         actions: [
+          if (_tags.isNotEmpty)
+            _TagFilterButton(
+              tags: _tags,
+              selectedId: _tagId,
+              countFor: _countForTag,
+              onSelected: (id) => setState(() => _tagId = id),
+            ),
           if (canAdd)
             IconButton(
               tooltip: 'New profile',
@@ -193,7 +200,7 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
             ),
           ),
           SizedBox(
-            height: 44,
+            height: 46,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
@@ -201,50 +208,18 @@ class _ChildrenScreenState extends State<ChildrenScreen> {
                 for (final f in ChildFilter.values)
                   Padding(
                     padding: const EdgeInsets.only(right: AppSpacing.sm),
-                    child: FilterChip(
-                      label: Text('${f.label} (${_countFor(f)})'),
-                      selected: _filter == f,
-                      onSelected: (_) => setState(() => _filter = f),
+                    child: Center(
+                      child: FilterChip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text('${f.label} (${_countFor(f)})'),
+                        selected: _filter == f,
+                        onSelected: (_) => setState(() => _filter = f),
+                      ),
                     ),
                   ),
               ],
             ),
           ),
-          // Only when the family has tags — an empty row of one dead chip is
-          // just clutter for a household that doesn't use them.
-          if (_tags.isNotEmpty)
-            SizedBox(
-              height: 42,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.md,
-                ),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(right: AppSpacing.sm),
-                    child: FilterChip(
-                      label: Text('All tags (${_countForTag(null)})'),
-                      selected: _tagId == null,
-                      onSelected: (_) => setState(() => _tagId = null),
-                    ),
-                  ),
-                  for (final t in _tags)
-                    Padding(
-                      padding: const EdgeInsets.only(right: AppSpacing.sm),
-                      child: FilterChip(
-                        avatar: CircleAvatar(
-                          backgroundColor: t.color,
-                          radius: 6,
-                        ),
-                        label: Text('${t.name} (${_countForTag(t.id)})'),
-                        selected: _tagId == t.id,
-                        onSelected: (_) => setState(() => _tagId = t.id),
-                      ),
-                    ),
-                ],
-              ),
-            ),
           Expanded(
             child: visible.isEmpty
                 ? const Center(
@@ -320,7 +295,6 @@ class ProfileTile extends StatelessWidget {
         ? worst.likelyRemoved || worst.removalUnlocked
         : status == ChildStatus.removed;
     final statusColor = worst?.statusColor ?? status.color;
-    final statusLabel = worst?.statusLabel ?? status.label;
     final ok = worst != null
         ? worst.severity == 0
         : status == ChildStatus.online;
@@ -426,7 +400,8 @@ class ProfileTile extends StatelessWidget {
                           runSpacing: 5,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            _StatusPill(label: statusLabel, color: statusColor),
+                            // No status wording here — the ring and the badge
+                            // on the avatar already say it.
                             // Which devices those are: the status above is the
                             // worst of them, so the count is what tells a
                             // parent whether anything else is linked.
@@ -519,6 +494,113 @@ class _StatusPill extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The tag filter, as a single app-bar control.
+///
+/// `PopupMenuButton` treats a null result as a dismissal, so "All tags"
+/// travels as an empty string rather than null.
+class _TagFilterButton extends StatelessWidget {
+  const _TagFilterButton({
+    required this.tags,
+    required this.selectedId,
+    required this.countFor,
+    required this.onSelected,
+  });
+
+  final List<FamilyTag> tags;
+  final String? selectedId;
+  final int Function(String? tagId) countFor;
+  final ValueChanged<String?> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    FamilyTag? current;
+    for (final t in tags) {
+      if (t.id == selectedId) {
+        current = t;
+        break;
+      }
+    }
+    final on = current != null;
+    final accent = current?.color ?? AppColors.textSecondaryOf(context);
+    return PopupMenuButton<String>(
+      tooltip: 'Filter by tag',
+      position: PopupMenuPosition.under,
+      onSelected: (v) => onSelected(v.isEmpty ? null : v),
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          value: '',
+          child: Text('All tags (${countFor(null)})'),
+        ),
+        for (final t in tags)
+          PopupMenuItem(
+            value: t.id,
+            child: Row(
+              children: [
+                CircleAvatar(backgroundColor: t.color, radius: 6),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(
+                  child: Text(t.name, overflow: TextOverflow.ellipsis),
+                ),
+                const SizedBox(width: AppSpacing.sm),
+                Text(
+                  '${countFor(t.id)}',
+                  style: TextStyle(
+                    color: AppColors.textSecondaryOf(context),
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      child: Center(
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: AppSpacing.xs),
+          padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
+          decoration: BoxDecoration(
+            color: on ? accent.withValues(alpha: 0.12) : Colors.transparent,
+            border: Border.all(
+              color: on
+                  ? accent.withValues(alpha: 0.55)
+                  : AppColors.borderOf(context),
+            ),
+            borderRadius: BorderRadius.circular(AppRadius.pill),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (on)
+                CircleAvatar(backgroundColor: accent, radius: 5)
+              else
+                Icon(Icons.sell_outlined, size: 15, color: accent),
+              const SizedBox(width: 6),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 110),
+                child: Text(
+                  current?.name ?? 'All tags',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: on ? accent : AppColors.textPrimaryOf(context),
+                  ),
+                ),
+              ),
+              Icon(
+                Icons.arrow_drop_down_rounded,
+                size: 20,
+                color: on ? accent : AppColors.textSecondaryOf(context),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

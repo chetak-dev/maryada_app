@@ -663,6 +663,30 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
                   );
                 }
 
+                // Profiles is pushed underneath the child, so Back from a
+                // profile lands on the list rather than all the way home.
+                void openChild(Child child, String familyId) {
+                  final nav = Navigator.of(context);
+                  nav.push(
+                    MaterialPageRoute(
+                      builder: (_) => ChildrenScreen(
+                        children: kids,
+                        latestVersionCode: _latestVersionCode,
+                        familyId: canAdd ? ownFamilyId : null,
+                        maxChildren: maxChildren,
+                      ),
+                    ),
+                  );
+                  nav.push(
+                    MaterialPageRoute(
+                      builder: (_) => ChildDetailScreen(
+                        child: child,
+                        familyId: familyId.isEmpty ? null : familyId,
+                      ),
+                    ),
+                  );
+                }
+
                 // The strip's Add chip creates a profile; devices are paired
                 // from inside the profile (that's where the device limit is
                 // enforced — profiles themselves are unlimited).
@@ -689,6 +713,7 @@ class _FamilyChildrenState extends State<_FamilyChildren> {
                       _FamilyStrip(
                         kids: kids,
                         onAdd: canAdd ? addProfile : null,
+                        onOpen: openChild,
                       ),
                   ],
                 );
@@ -821,10 +846,14 @@ class _SectionLabel extends StatelessWidget {
 /// ring, scrolling horizontally. Tap opens the child; the last chip adds a
 /// device.
 class _FamilyStrip extends StatelessWidget {
-  const _FamilyStrip({required this.kids, this.onAdd});
+  const _FamilyStrip({required this.kids, this.onAdd, this.onOpen});
 
   final List<({Child child, String familyId})> kids;
   final VoidCallback? onAdd;
+
+  /// Opens one child. Supplied by the dashboard so the profile list can be
+  /// pushed underneath it, giving Back somewhere sensible to land.
+  final void Function(Child child, String familyId)? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -844,7 +873,11 @@ class _FamilyStrip extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           children: [
             for (final k in kids)
-              _AvatarChip(child: k.child, familyId: k.familyId),
+              _AvatarChip(
+                child: k.child,
+                familyId: k.familyId,
+                onOpen: onOpen,
+              ),
             if (onAdd != null) _AddChip(onTap: onAdd!),
           ],
         ),
@@ -854,9 +887,14 @@ class _FamilyStrip extends StatelessWidget {
 }
 
 class _AvatarChip extends StatelessWidget {
-  const _AvatarChip({required this.child, required this.familyId});
+  const _AvatarChip({
+    required this.child,
+    required this.familyId,
+    this.onOpen,
+  });
   final Child child;
   final String familyId;
+  final void Function(Child child, String familyId)? onOpen;
 
   @override
   Widget build(BuildContext context) {
@@ -876,14 +914,21 @@ class _AvatarChip extends StatelessWidget {
     final ringColor = child.paired ? statusColor : AppColors.borderOf(context);
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.md),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => ChildDetailScreen(
-            child: child,
-            familyId: familyId.isEmpty ? null : familyId,
+      onTap: () {
+        final open = onOpen;
+        if (open != null) {
+          open(child, familyId);
+          return;
+        }
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ChildDetailScreen(
+              child: child,
+              familyId: familyId.isEmpty ? null : familyId,
+            ),
           ),
-        ),
-      ),
+        );
+      },
       child: Container(
         width: 84,
         padding: const EdgeInsets.symmetric(horizontal: 4),

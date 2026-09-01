@@ -94,6 +94,149 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
     });
   }
 
+  /// Name and tag are edited together, behind a confirmation.
+  ///
+  /// A profile's name and group are how a parent identifies whose data they
+  /// are looking at, so a stray tap must not be able to change either. The
+  /// site admin owns the tag vocabulary — a guardian only picks from it.
+  Future<void> _editProfile(
+    String familyId,
+    Child child,
+    List<FamilyTag> tags,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit profile?'),
+        content: Text(
+          'You are about to change $_name\u2019s name or group. '
+          'Continue only if you meant to.',
+        ),
+        actions: [
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+          DialogConfirmButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            label: 'Continue',
+          ),
+        ],
+      ),
+    );
+    if (go != true || !mounted) return;
+
+    final controller = TextEditingController(text: _name);
+    // A profile wears at most one tag, so this is a single choice.
+    String? originalTag;
+    for (final t in tags) {
+      if (child.tagIds.contains(t.id)) {
+        originalTag = t.id;
+        break;
+      }
+    }
+    var tagId = originalTag;
+    final saved = await showDialog<({String name, String? tagId})>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) {
+          final name = controller.text.trim();
+          // A tag is required once the admin has defined any, so every profile
+          // stays groupable.
+          final ready = name.isNotEmpty && (tags.isEmpty || tagId != null);
+          return AlertDialog(
+            title: const Text('Edit profile'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: controller,
+                    textCapitalization: TextCapitalization.words,
+                    onChanged: (_) => setState(() {}),
+                    decoration: const InputDecoration(labelText: 'Name'),
+                  ),
+                  if (tags.isNotEmpty) ...[
+                    const SizedBox(height: AppSpacing.md),
+                    Text(
+                      'Group',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textSecondaryOf(ctx),
+                      ),
+                    ),
+                    RadioGroup<String>(
+                      groupValue: tagId,
+                      onChanged: (v) => setState(() => tagId = v),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final t in tags)
+                            RadioListTile<String>(
+                              contentPadding: EdgeInsets.zero,
+                              dense: true,
+                              value: t.id,
+                              secondary: CircleAvatar(
+                                backgroundColor: t.color,
+                                radius: 8,
+                              ),
+                              title: Text(t.name),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+              DialogConfirmButton(
+                onPressed: ready
+                    ? () => Navigator.pop(ctx, (name: name, tagId: tagId))
+                    : null,
+                label: 'Save',
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    controller.dispose();
+    if (saved == null || !mounted) return;
+
+    final renamed = saved.name != _name;
+    // Also rewritten when a profile carried several tags from before the
+    // one-tag rule, so saving collapses it to the single choice.
+    final retagged =
+        saved.tagId != originalTag || child.tagIds.length > 1;
+    if (!renamed && !retagged) return;
+    if (!await Net.require(context)) return;
+    try {
+      if (renamed) {
+        await FamilyRepository.instance.renameChild(
+          familyId,
+          child.id,
+          saved.name,
+        );
+        if (mounted) setState(() => _name = saved.name);
+      }
+      if (retagged) {
+        await TagsRepository.instance.setChildTags(
+          familyId,
+          child.id,
+          saved.tagId == null ? const [] : [saved.tagId!],
+        );
+      }
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Couldn\u2019t save the profile — ${friendlyError(e)}'),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -109,15 +252,6 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_name),
-        actions: [
-          if (canEdit)
-            IconButton(
-              tooltip: 'Rename',
-              icon: const Icon(Icons.edit_outlined),
-              onPressed: _rename,
-            ),
-          const SizedBox(width: AppSpacing.xs),
-        ],
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -137,12 +271,32 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
               children: [
                 if (Db.ready)
                   _ChildSwitcher(currentId: child.id, onSelect: _switchTo),
-                _ProfileHeaderCard(
-                  name: _name,
-                  child: child,
-                  devices: devices,
-                  faulty: faulty,
-                ),
+                if (familyId != null && Db.ready)
+                  StreamBuilder<List<FamilyTag>>(
+                    stream: TagsRepository.instance.watch(familyId),
+                    builder: (context, snap) {
+                      final all = snap.data ?? const <FamilyTag>[];
+                      return _ProfileHeaderCard(
+                        name: _name,
+                        child: child,
+                        devices: devices,
+                        faulty: faulty,
+                        tags: all
+                            .where((t) => child.tagIds.contains(t.id))
+                            .toList(),
+                        onEdit: canEdit
+                            ? () => _editProfile(familyId, child, all)
+                            : null,
+                      );
+                    },
+                  )
+                else
+                  _ProfileHeaderCard(
+                    name: _name,
+                    child: child,
+                    devices: devices,
+                    faulty: faulty,
+                  ),
               ],
             ),
           ),
@@ -160,13 +314,9 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
                   _DeviceIssueCard(device: device),
                   const SizedBox(height: AppSpacing.md),
                 ],
-                if (_live) ...[
-                  _TagsRow(
-                    familyId: familyId!,
-                    child: child,
-                    canEdit: canEdit,
-                  ),
-                  const SizedBox(height: AppSpacing.md),
+                // Null-checked rather than `_live` so `familyId` promotes to
+                // non-null for the screens opened below.
+                if (familyId != null && Db.ready) ...[
                   Row(
                     children: [
                       Expanded(
@@ -402,57 +552,6 @@ class _ChildDetailScreenState extends State<ChildDetailScreen> {
     );
   }
 
-  Future<void> _rename() async {
-    final controller = TextEditingController(text: _name);
-    final focus = FocusNode();
-    WidgetsBinding.instance.addPostFrameCallback((_) => focus.requestFocus());
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename'),
-        content: TextField(
-          controller: controller,
-          focusNode: focus,
-          textInputAction: TextInputAction.done,
-          textCapitalization: TextCapitalization.words,
-          decoration: const InputDecoration(labelText: 'Name'),
-          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
-        ),
-        actions: [
-          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
-          DialogConfirmButton(
-            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            label: 'Save',
-          ),
-        ],
-      ),
-    );
-    focus.dispose();
-    if (newName == null || newName.isEmpty || newName == _name) return;
-
-    if (_live) {
-      if (!mounted) return;
-      if (!await Net.require(context)) return;
-      try {
-        await FamilyRepository.instance.renameChild(
-          _familyId!,
-          _child.id,
-          newName,
-        );
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Couldn\u2019t rename \u2014 ${friendlyError(e)}'),
-            ),
-          );
-        }
-        return;
-      }
-    }
-    if (mounted) setState(() => _name = newName);
-  }
-
   Future<void> _confirmDeleteProfile(BuildContext context) async {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -536,6 +635,8 @@ class _ProfileHeaderCard extends StatelessWidget {
     required this.child,
     required this.devices,
     required this.faulty,
+    this.tags = const [],
+    this.onEdit,
   });
 
   final String name;
@@ -545,12 +646,17 @@ class _ProfileHeaderCard extends StatelessWidget {
   /// The device a parent should deal with first, if any.
   final Device? faulty;
 
+  /// Only the tags this profile wears, already resolved to names and colours.
+  final List<FamilyTag> tags;
+
+  /// Null hides the edit affordance for read-only guardians.
+  final VoidCallback? onEdit;
+
   @override
   Widget build(BuildContext context) {
     final worst = ProfileStatus.worst(devices);
     final status = child.effectiveStatus;
     final statusColor = worst?.statusColor ?? status.color;
-    final statusLabel = worst?.statusLabel ?? status.label;
     final removed = worst != null
         ? worst.likelyRemoved || worst.removalUnlocked
         : status == ChildStatus.removed;
@@ -626,21 +732,10 @@ class _ProfileHeaderCard extends StatelessWidget {
                     runSpacing: 5,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      _HeaderPill(
-                        label: statusLabel,
-                        color: statusColor,
-                        dot: true,
-                      ),
-                      if (devices.isNotEmpty)
-                        _HeaderPill(
-                          label: devices.length == 1
-                              ? devices.first.label
-                              : '${devices.length} devices',
-                          color: AppColors.textSecondaryOf(context),
-                          icon: devices.length == 1
-                              ? devices.first.icon
-                              : Icons.devices_rounded,
-                        ),
+                      // Name and group only. Status and platform both belong to
+                      // a device, and every device has its own card below.
+                      for (final t in tags)
+                        _HeaderPill(label: t.name, color: t.color),
                     ],
                   ),
                 // With several devices the pill above is the worst of them, so
@@ -661,6 +756,19 @@ class _ProfileHeaderCard extends StatelessWidget {
               ],
             ),
           ),
+          if (onEdit != null)
+            IconButton(
+              tooltip: 'Edit name and group',
+              onPressed: onEdit,
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 32, height: 32),
+              icon: Icon(
+                Icons.edit_outlined,
+                size: 18,
+                color: AppColors.textSecondaryOf(context),
+              ),
+            ),
         ],
       ),
     );
@@ -668,17 +776,10 @@ class _ProfileHeaderCard extends StatelessWidget {
 }
 
 class _HeaderPill extends StatelessWidget {
-  const _HeaderPill({
-    required this.label,
-    required this.color,
-    this.icon,
-    this.dot = false,
-  });
+  const _HeaderPill({required this.label, required this.color});
 
   final String label;
   final Color color;
-  final IconData? icon;
-  final bool dot;
 
   @override
   Widget build(BuildContext context) {
@@ -689,32 +790,19 @@ class _HeaderPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(AppRadius.pill),
         border: Border.all(color: color.withValues(alpha: 0.28)),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (dot)
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            ),
-          if (icon != null) Icon(icon, size: 11, color: color),
-          const SizedBox(width: 5),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 150),
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: color,
-                fontSize: 10.5,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 0.2,
-              ),
-            ),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 150),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: color,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.2,
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1200,19 +1288,20 @@ class _DeviceCard extends StatelessWidget {
                               color: AppColors.textMuted,
                             ),
                           ),
-                        // Says how long the silence has lasted. Without it an
-                        // uninstalled phone and one quiet for ten minutes read
-                        // exactly the same.
-                        Text(
-                          device.lastSeenLabel,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
-                            color: device.isSilent
-                                ? AppColors.warning
-                                : AppColors.textMuted,
+                        // Only worth saying when something is wrong: on a
+                        // healthy device the status already means it reported
+                        // just now, and the extra line was noise.
+                        if (device.severity > 0)
+                          Text(
+                            device.lastSeenLabel,
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                              color: device.isSilent
+                                  ? AppColors.warning
+                                  : AppColors.textMuted,
+                            ),
                           ),
-                        ),
                         // An OTA is otherwise invisible until it lands.
                         if (latestVersionCode > 0 &&
                             device.appVersionCode > 0 &&
@@ -1333,136 +1422,5 @@ class _FeatureTile extends StatelessWidget {
         ),
       ),
     );
-  }
-}
-
-/// The groups this profile belongs to.
-///
-/// The site admin owns the vocabulary — a guardian can only choose from it,
-/// so a tag means the same thing on every profile in the household.
-class _TagsRow extends StatelessWidget {
-  const _TagsRow({
-    required this.familyId,
-    required this.child,
-    required this.canEdit,
-  });
-
-  final String familyId;
-  final Child child;
-  final bool canEdit;
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<List<FamilyTag>>(
-      stream: TagsRepository.instance.watch(familyId),
-      builder: (context, snap) {
-        final tags = snap.data ?? const <FamilyTag>[];
-        // Nothing to say until an admin has created some.
-        if (tags.isEmpty) return const SizedBox.shrink();
-        final mine = tags.where((t) => child.tagIds.contains(t.id)).toList();
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: mine.isEmpty
-                  ? Text(
-                      'No tags',
-                      style: TextStyle(
-                        color: AppColors.textSecondaryOf(context),
-                        fontSize: 13,
-                      ),
-                    )
-                  : Wrap(
-                      spacing: 6,
-                      runSpacing: 5,
-                      children: [
-                        for (final t in mine)
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color: t.color.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              t.name,
-                              style: TextStyle(
-                                color: t.color,
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-            ),
-            if (canEdit)
-              TextButton.icon(
-                onPressed: () => _pick(context, tags),
-                icon: const Icon(Icons.sell_outlined, size: 18),
-                label: Text(mine.isEmpty ? 'Add tags' : 'Edit'),
-              ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _pick(BuildContext context, List<FamilyTag> tags) async {
-    final messenger = ScaffoldMessenger.of(context);
-    final chosen = Set<String>.from(child.tagIds);
-    final saved = await showDialog<Set<String>>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: const Text('Tags'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final t in tags)
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: chosen.contains(t.id),
-                    onChanged: (v) => setState(() {
-                      if (v == true) {
-                        chosen.add(t.id);
-                      } else {
-                        chosen.remove(t.id);
-                      }
-                    }),
-                    secondary: CircleAvatar(
-                      backgroundColor: t.color,
-                      radius: 8,
-                    ),
-                    title: Text(t.name),
-                  ),
-              ],
-            ),
-          ),
-          actions: [
-            DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
-            DialogConfirmButton(
-              onPressed: () => Navigator.pop(ctx, chosen),
-              label: 'Save',
-            ),
-          ],
-        ),
-      ),
-    );
-    if (saved == null) return;
-    try {
-      await TagsRepository.instance.setChildTags(
-        familyId,
-        child.id,
-        saved.toList(),
-      );
-    } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Couldn\u2019t save tags — ${friendlyError(e)}')),
-      );
-    }
   }
 }

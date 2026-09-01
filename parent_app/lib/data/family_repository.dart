@@ -189,6 +189,7 @@ class FamilyRepository {
     required String familyId,
     required String name,
     int avatarColor = 0xFF4F46E5,
+    List<String> tagIds = const [],
   }) async {
     final doc = Db.children(familyId).doc();
     await doc.set({
@@ -199,6 +200,7 @@ class FamilyRepository {
       'online': false,
       'setupComplete': false,
       'permissionsOk': false,
+      if (tagIds.isNotEmpty) 'tagIds': tagIds,
       'createdAt': FieldValue.serverTimestamp(),
     });
     // One more mouth at the write budget: everyone slows down a little.
@@ -209,6 +211,7 @@ class FamilyRepository {
       deviceModel: '',
       avatarColor: Color(avatarColor),
       status: ChildStatus.offline,
+      tagIds: tagIds,
     );
   }
 

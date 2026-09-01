@@ -90,12 +90,19 @@ class TagsRepository {
     await _col(familyId).doc(tagId).delete();
   }
 
-  /// Guardian action: which tags this profile wears.
+  /// Guardian action: which tag this profile wears.
+  ///
+  /// A profile belongs to at most one tag. The field stays an array so the
+  /// `arrayContains` queries above keep working, and so profiles tagged before
+  /// that rule still parse.
   Future<void> setChildTags(
     String familyId,
     String childId,
     List<String> tagIds,
   ) {
+    if (tagIds.length > 1) {
+      throw StateError('a profile can only belong to one tag.');
+    }
     return Db.children(
       familyId,
     ).doc(childId).set({'tagIds': tagIds}, SetOptions(merge: true));
