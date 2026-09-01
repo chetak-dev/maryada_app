@@ -33,6 +33,23 @@ class HostsRepository {
     return _col.doc(uid).set({'access': accessId(access)}, SetOptions(merge: true));
   }
 
+  /// Narrows a parent to one tag's profiles, or '' for the whole family. Also
+  /// written onto the grant so re-signing-in doesn't restore the old scope.
+  Future<void> setTagId(String uid, String tagId) async {
+    await _col.doc(uid).set({'tagId': tagId}, SetOptions(merge: true));
+    final snap = await _col.doc(uid).get();
+    final code = (snap.data()?['inviteCode'] ?? '').toString();
+    if (code.isEmpty) return;
+    try {
+      await Db.instance
+          .collection('invites')
+          .doc(code)
+          .set({'tagId': tagId}, SetOptions(merge: true));
+    } catch (_) {
+      // The grant may have been revoked; the account record is what counts.
+    }
+  }
+
   /// Removes an org admin's account record, revoking their access. Their
   /// families/children are left intact; they become a blocked account until
   /// granted access again.

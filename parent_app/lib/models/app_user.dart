@@ -47,6 +47,10 @@ class AppUser {
   /// Empty for the first parent of a household — they get their own family on
   /// first sign-in.
   final String familyId;
+
+  /// Limits this parent to the profiles carrying one tag. Empty means the whole
+  /// family, which is what every account had before scoping existed.
+  final String tagId;
   final DateTime? createdAt;
 
   const AppUser({
@@ -59,6 +63,7 @@ class AppUser {
     this.suspended = false,
     this.inviteCode,
     this.familyId = '',
+    this.tagId = '',
     this.createdAt,
   });
 
@@ -87,6 +92,7 @@ class AppUser {
       suspended: m['suspended'] == true,
       inviteCode: m['inviteCode']?.toString(),
       familyId: (m['familyId'] ?? '').toString(),
+      tagId: (m['tagId'] ?? '').toString(),
       createdAt: ts is Timestamp ? ts.toDate() : null,
     );
   }
@@ -100,6 +106,7 @@ class AppUser {
         'suspended': suspended,
         if (inviteCode != null) 'inviteCode': inviteCode,
         'familyId': familyId,
+        'tagId': tagId,
         'createdAt': FieldValue.serverTimestamp(),
       };
 }

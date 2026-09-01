@@ -64,9 +64,14 @@ class RemovalWatch {
     final me = await db.collection('users').doc(uid).get();
     final familyId = (me.data()?['familyId'] ?? '').toString();
     if (familyId.isEmpty) return true;
+    final tagId = (me.data()?['tagId'] ?? '').toString();
 
-    final kids =
-        await db.collection('families').doc(familyId).collection('children').get();
+    // Scoped: don't alert a parent about a profile their grant excluded.
+    final base = db.collection('families').doc(familyId).collection('children');
+    final kids = await (tagId.isEmpty
+            ? base
+            : base.where('tagIds', arrayContains: tagId))
+        .get();
 
     final prefs = await SharedPreferences.getInstance();
     final notified = prefs.getStringList(_seenKey)?.toSet() ?? <String>{};

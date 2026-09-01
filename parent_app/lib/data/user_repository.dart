@@ -66,6 +66,7 @@ class UserRepository {
         suspended: existing?.suspended ?? false,
         inviteCode: grant.code,
         familyId: grant.familyId,
+        tagId: grant.tagId,
       );
       await ref.set(u.toCreateMap());
       try {

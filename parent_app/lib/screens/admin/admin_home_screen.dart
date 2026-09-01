@@ -5,8 +5,10 @@ import '../../data/app_update_repository.dart';
 import '../../data/hosts_repository.dart';
 import '../../data/family_repository.dart';
 import '../../data/invites_repository.dart';
+import '../../data/tags_repository.dart';
 import '../../models/app_user.dart';
 import '../../models/family.dart';
+import '../../models/tag.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/feedback.dart';
 import '../../widgets/brand_mark.dart';
@@ -545,6 +547,9 @@ Future<void> _inviteHost(BuildContext context) async {
     var accessMissing = false;
     // Empty = create a new household, named below.
     var familyId = '';
+    // Empty = every profile in the family.
+    var tagId = '';
+    var tags = <FamilyTag>[];
     var families = <FamilyModel>[];
     try {
       families = await FamilyRepository.instance.listFamilies();
@@ -601,7 +606,18 @@ Future<void> _inviteHost(BuildContext context) async {
                         child: Text(f.name, overflow: TextOverflow.ellipsis),
                       ),
                   ],
-                  onChanged: (v) => setLocal(() => familyId = v ?? ''),
+                  onChanged: (v) async {
+                    setLocal(() {
+                      familyId = v ?? '';
+                      // A group belongs to one family, so a family change
+                      // invalidates the choice.
+                      tagId = '';
+                      tags = const [];
+                    });
+                    if (familyId.isEmpty) return;
+                    final loaded = await TagsRepository.instance.load(familyId);
+                    setLocal(() => tags = loaded);
+                  },
                 ),
                 if (familyId.isEmpty) ...[
                   const SizedBox(height: AppSpacing.sm),
@@ -632,6 +648,35 @@ Future<void> _inviteHost(BuildContext context) async {
                       : 'They join this family and share its children.',
                   style: Theme.of(ctx).textTheme.bodySmall,
                 ),
+                if (tags.isNotEmpty) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Text('Group', style: Theme.of(ctx).textTheme.labelLarge),
+                  const SizedBox(height: AppSpacing.xs),
+                  DropdownButtonFormField<String>(
+                    initialValue: tagId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(isDense: true),
+                    items: [
+                      const DropdownMenuItem(
+                        value: '',
+                        child: Text('All profiles'),
+                      ),
+                      for (final t in tags)
+                        DropdownMenuItem(
+                          value: t.id,
+                          child: Text(t.name, overflow: TextOverflow.ellipsis),
+                        ),
+                    ],
+                    onChanged: (v) => setLocal(() => tagId = v ?? ''),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    tagId.isEmpty
+                        ? 'Sees every profile in this family.'
+                        : 'Sees only profiles in this group.',
+                    style: Theme.of(ctx).textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: AppSpacing.md),
                 Text('Access',
                     style: Theme.of(ctx).textTheme.labelLarge),
@@ -724,6 +769,7 @@ Future<void> _inviteHost(BuildContext context) async {
         maxChildren: int.parse(limitCtl.text.trim()),
         access: access!,
         familyId: targetFamilyId,
+        tagId: tagId,
       );
       if (context.mounted) {
         _showGrantDone(context, emailCtl.text.trim(), access!);
@@ -944,6 +990,8 @@ class _HostCard extends StatelessWidget {
                 onSelected: (v) async {
                   if (v == 'limit') {
                     await _editLimit(context, host);
+                  } else if (v == 'group') {
+                    await _editGroup(context, host);
                   } else if (v == 'edit') {
                     if (await _confirm(context,
                         title: 'Give edit access?',
@@ -1031,6 +1079,8 @@ class _HostCard extends StatelessWidget {
                   if (host.access == AccessLevel.edit)
                     const PopupMenuItem(
                         value: 'limit', child: Text('Set device limit')),
+                  const PopupMenuItem(
+                      value: 'group', child: Text('Set visible group')),
                   PopupMenuItem(
                     value: 'suspend',
                     child: Text(host.suspended ? 'Activate' : 'Suspend'),
@@ -1047,6 +1097,87 @@ class _HostCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+
+  /// Narrows a parent to one group of profiles, or back to all of them. The
+  /// site admin can change this at any time; it takes effect on the parent's
+  /// next snapshot, without them signing in again.
+  Future<void> _editGroup(BuildContext context, AppUser host) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (host.familyId.isEmpty) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('This parent has no family yet.'),
+      ));
+      return;
+    }
+    List<FamilyTag> tags;
+    try {
+      tags = await TagsRepository.instance.load(host.familyId);
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Couldn\u2019t load groups — ${friendlyError(e)}')),
+      );
+      return;
+    }
+    if (!context.mounted) return;
+    if (tags.isEmpty) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('This family has no groups yet. Create one first.'),
+      ));
+      return;
+    }
+    var chosen = host.tagId;
+    final saved = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Visible group'),
+          content: SingleChildScrollView(
+            child: RadioGroup<String>(
+              groupValue: chosen,
+              onChanged: (v) => setLocal(() => chosen = v ?? ''),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const RadioListTile<String>(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    value: '',
+                    title: Text('All profiles'),
+                  ),
+                  for (final t in tags)
+                    RadioListTile<String>(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      value: t.id,
+                      secondary:
+                          CircleAvatar(backgroundColor: t.color, radius: 8),
+                      title: Text(t.name),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+            DialogConfirmButton(
+              onPressed: () => Navigator.pop(ctx, chosen),
+              label: 'Save',
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == null || saved == host.tagId || !context.mounted) return;
+    final label = saved.isEmpty
+        ? 'all profiles'
+        : tags.firstWhere((t) => t.id == saved).name;
+    await _save(
+      context,
+      () => HostsRepository.instance.setTagId(host.uid, saved),
+      'Couldn\u2019t change the group',
+      '${host.email} now sees $label.',
     );
   }
 

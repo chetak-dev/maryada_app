@@ -52,7 +52,7 @@ class _LiveAlerts extends StatelessWidget {
         final familyId = famSnap.data ?? '';
         if (familyId.isEmpty) return _EmptyAlerts();
         return StreamBuilder<List<Child>>(
-          stream: FamilyRepository.instance.watchChildren(familyId),
+          stream: FamilyRepository.instance.watchScopedChildren(familyId),
           builder: (context, kidSnap) {
             final names = <String, String>{
               for (final c in (kidSnap.data ?? const <Child>[])) c.id: c.name,

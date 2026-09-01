@@ -44,7 +44,9 @@ class _LocationScreenState extends State<LocationScreen> {
         children: [
           if (_live)
             StreamBuilder<List<Child>>(
-              stream: FamilyRepository.instance.watchChildren(widget.familyId!),
+              stream: FamilyRepository.instance.watchScopedChildren(
+                widget.familyId!,
+              ),
               builder: (context, snap) {
                 final kids = snap.data ?? const <Child>[];
 

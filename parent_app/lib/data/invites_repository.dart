@@ -23,6 +23,10 @@ class Invite {
   /// household that already exists.
   final String familyId;
 
+  /// Restricts the parent to profiles carrying this tag. Empty means every
+  /// profile in the family.
+  final String tagId;
+
   const Invite({
     required this.code,
     required this.email,
@@ -30,6 +34,7 @@ class Invite {
     required this.maxChildren,
     required this.used,
     this.familyId = '',
+    this.tagId = '',
     this.createdAt,
   });
 
@@ -42,6 +47,7 @@ class Invite {
       maxChildren: (m['maxChildren'] as num?)?.toInt() ?? 5,
       used: m['used'] == true,
       familyId: (m['familyId'] ?? '').toString(),
+      tagId: (m['tagId'] ?? '').toString(),
       createdAt: ts is Timestamp ? ts.toDate() : null,
     );
   }
@@ -83,12 +89,14 @@ class InvitesRepository {
     required int maxChildren,
     required AccessLevel access,
     String familyId = '',
+    String tagId = '',
   }) async {
     await _col.doc(keyFor(email)).set({
       'email': keyFor(email),
       'access': accessId(access),
       'maxChildren': maxChildren,
       'familyId': familyId,
+      'tagId': tagId,
       'used': false,
       'createdAt': FieldValue.serverTimestamp(),
     });

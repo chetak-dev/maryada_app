@@ -151,10 +151,57 @@ class FamilyRepository {
 
   // ---- Children ----------------------------------------------------------
 
-  Stream<List<Child>> watchChildren(String familyId) {
-    return Db.children(familyId).snapshots().map(
+  Stream<List<Child>> watchChildren(String familyId, {String tagId = ''}) {
+    final q = tagId.isEmpty
+        ? Db.children(familyId)
+        : Db.children(familyId).where('tagIds', arrayContains: tagId);
+    return q.snapshots().map(
       (s) => s.docs.map((d) => _childFromDoc(d.id, d.data())).toList(),
     );
+  }
+
+  /// The tag a parent's grant restricts them to, or '' for the whole family.
+  Stream<String> watchMyTagId(String uid) {
+    return Db.instance
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .map((d) => (d.data()?['tagId'] ?? '').toString());
+  }
+
+  /// One-shot read of the signed-in parent's tag scope. '' means the whole
+  /// family, which is what a site admin and every pre-scoping account gets.
+  Future<String> myTagId([String? uid]) async {
+    final me = uid ?? FirebaseAuth.instance.currentUser?.uid;
+    if (me == null) return '';
+    try {
+      final d = await Db.instance.collection('users').doc(me).get();
+      return (d.data()?['tagId'] ?? '').toString();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// The profiles of [familyId] the signed-in parent may see. Every read of the
+  /// children collection should go through this or [watchScopedChildren], or a
+  /// scoped parent sees profiles their grant excluded.
+  Future<QuerySnapshot<Map<String, dynamic>>> scopedChildren(
+    String familyId,
+  ) async {
+    final tag = await myTagId();
+    final Query<Map<String, dynamic>> q = tag.isEmpty
+        ? Db.children(familyId)
+        : Db.children(familyId).where('tagIds', arrayContains: tag);
+    return q.get();
+  }
+
+  /// Live version of [scopedChildren].
+  Stream<List<Child>> watchScopedChildren(String familyId) {
+    final me = FirebaseAuth.instance.currentUser?.uid;
+    if (me == null) return watchChildren(familyId);
+    return watchMyTagId(
+      me,
+    ).asyncExpand((tagId) => watchChildren(familyId, tagId: tagId));
   }
 
   /// Every child profile in the signed-in parent's own family.
@@ -163,6 +210,9 @@ class FamilyRepository {
   /// children, so this follows the family their grant assigned — not whatever
   /// families they happen to still be listed in. Profiles without a device
   /// show too — a parent creates the profile first, then pairs devices to it.
+  ///
+  /// A grant may narrow this further to one tag, so a parent responsible for
+  /// one group doesn't see the rest of the household.
   Stream<List<({Child child, String familyId})>> watchMyChildren([
     String? uid,
   ]) {
@@ -174,14 +224,16 @@ class FamilyRepository {
       if (familyId.isEmpty) {
         return Stream.value(const <({Child child, String familyId})>[]);
       }
-      return watchChildren(familyId).map(
-        (kids) => kids.map((c) => (child: c, familyId: familyId)).toList()
-          ..sort(
-            (a, b) => a.child.name.toLowerCase().compareTo(
-              b.child.name.toLowerCase(),
+      return watchMyTagId(me).asyncExpand((tagId) {
+        return watchChildren(familyId, tagId: tagId).map(
+          (kids) => kids.map((c) => (child: c, familyId: familyId)).toList()
+            ..sort(
+              (a, b) => a.child.name.toLowerCase().compareTo(
+                b.child.name.toLowerCase(),
+              ),
             ),
-          ),
-      );
+        );
+      });
     });
   }
 
@@ -253,7 +305,7 @@ class FamilyRepository {
   /// off or asleep reports at its next check-in, as it would anyway.
   /// Returns how many profiles were asked.
   Future<int> requestSync(String familyId) async {
-    final kids = await Db.children(familyId).get();
+    final kids = await scopedChildren(familyId);
     if (kids.docs.isEmpty) return 0;
     final batch = Db.instance.batch();
     for (final kid in kids.docs) {
