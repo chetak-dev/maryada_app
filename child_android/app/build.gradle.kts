@@ -23,7 +23,7 @@ android {
         applicationId = "com.guardnest.kid"
         minSdk = 24
         targetSdk = 35
-        versionCode = 34
+        versionCode = 35
         versionName = "1.0.0"
     }
 
