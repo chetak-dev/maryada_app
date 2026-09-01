@@ -393,7 +393,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
         if (now - lastFeedSince < FEED_DWELL_MS) return
         ytActivePlayback = false
-        recordYt(title, channel)
+        // The dwell already elapsed watching it, so it counts.
+        recordYt(title, channel, seedMs = FEED_DWELL_MS)
     }
 
     /** Heuristic: a YouTube feed thumbnail's description mentions the channel /
@@ -454,19 +455,24 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
         if (now - lastShortSince < SHORT_DWELL_MS) return true
         ytActivePlayback = false
-        recordYt(title, channel)
+        recordYt(title, channel, seedMs = SHORT_DWELL_MS)
         return true
     }
 
-    /** Accumulates watch time for the current YouTube title and records it. */
-    private fun recordYt(title: String, channel: String) {
+    /** Accumulates watch time for the current YouTube title and records it.
+     *
+     * [seedMs] is credited when this title is first seen, for the sources that
+     * only recognise a video after it has already been on screen for a while.
+     * Without it their watch time started at zero and never reached
+     * `YoutubeStore.MIN_WATCHED_MS`, so the video never reached the parent. */
+    private fun recordYt(title: String, channel: String, seedMs: Long = 0L) {
         val now = System.currentTimeMillis()
         // Add the gap since the last capture of the SAME video (ignoring big
         // gaps that mean the child was away/paused).
         val addMs = if (title == lastYtTitle) {
             val d = now - lastYtTickAt
             if (d in 1..YT_MAX_GAP_MS) d else 0L
-        } else 0L
+        } else seedMs
         lastYtTitle = title
         if (channel.isNotBlank()) lastYtChannel = channel
         lastYtTickAt = now
@@ -1275,7 +1281,7 @@ class GuardNestAccessibilityService : AccessibilityService() {
         } ?: return
         try {
             val addr = readBrowserAddress(root, pkg) ?: return
-            enforceWebFilter(addr)
+            if (!isEditingAddressBar()) enforceWebFilter(addr)
             maybeCaptureBrowserYoutube(root, addr)
         } catch (_: Exception) {
         }
@@ -1364,6 +1370,37 @@ class GuardNestAccessibilityService : AccessibilityService() {
         }
     }
 
+    /**
+     * True while the child is typing in the address bar.
+     *
+     * The omnibox holds input focus then, so its text is a half-typed guess and
+     * the suggestion list below it echoes those keystrokes back. Acting on
+     * either blocked the child mid-word, before any page had been opened. A
+     * field focused inside the page (a site's own search box) is deliberately
+     * not counted: it sits below the toolbar, and blocking must keep working
+     * while the child types there.
+     */
+    private fun isEditingAddressBar(): Boolean {
+        val toolbarBottom = resources.displayMetrics.heightPixels * 0.18
+        val rect = Rect()
+        try {
+            for (w in windows) {
+                val root = w.root ?: continue
+                val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                    ?: continue
+                if (!focused.isEditable) continue
+                val id = focused.viewIdResourceName
+                if (id != null && URL_BAR_IDS.any { id == it || id.endsWith(":id/$it") }) {
+                    return true
+                }
+                focused.getBoundsInScreen(rect)
+                if (rect.top <= toolbarBottom) return true
+            }
+        } catch (_: Exception) {
+        }
+        return false
+    }
+
     /** Returns true while a browser is foreground (so the caller polls fast). */
     private fun guardBrowserNow(): Boolean {
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
@@ -1377,6 +1414,8 @@ class GuardNestAccessibilityService : AccessibilityService() {
             WebHistoryStore.endVisit()
             return false
         }
+        // Nothing is judged until the child has actually opened a page.
+        if (isEditingAddressBar()) return true
         val addr = readAnyBrowserAddress(pkg)
         if (addr != null) {
             WebHistoryStore.recordVisit(addr)
