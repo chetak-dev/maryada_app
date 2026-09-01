@@ -321,6 +321,34 @@ class _MapThumbState extends State<_MapThumb> {
     super.dispose();
   }
 
+  /// Inverts the light basemap, then rotates hue 180° so parks stay green and
+  /// water stays blue instead of going magenta.
+  static const _darkBasemapFilter = ColorFilter.matrix(<double>[
+    0.574, -1.430, -0.144, 0, 255, //
+    -0.426, -0.430, -0.144, 0, 255, //
+    -0.426, -1.430, 0.856, 0, 255, //
+    0, 0, 0, 1, 0, //
+  ]);
+
+  Widget _basemap(BuildContext context, bool isDark) {
+    final tiles = TileLayer(
+      urlTemplate:
+          'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+      // Esri serves a "Map data not yet available" placeholder past z17 over
+      // much of India. Retina simulation requests one zoom deeper than shown,
+      // and flutter_map caps that request at exactly maxNativeZoom — so 17
+      // keeps tiles sharp while never asking for the placeholder band.
+      maxNativeZoom: 17,
+      retinaMode: RetinaMode.isHighDensity(context),
+      userAgentPackageName: 'com.guardnest.guardnest_parent',
+    );
+    // Esri has no dark basemap that keeps street detail at this zoom, so the
+    // dark map is derived from the light one.
+    return isDark
+        ? ColorFiltered(colorFilter: _darkBasemapFilter, child: tiles)
+        : tiles;
+  }
+
   @override
   Widget build(BuildContext context) {
     final here = LatLng(widget.lat, widget.lng);
@@ -339,16 +367,7 @@ class _MapThumbState extends State<_MapThumb> {
             ),
           ),
           children: [
-            TileLayer(
-              // CARTO's basemap reads like a modern map app; plain OSM raster
-              // tiles look dated. `{r}` serves retina tiles, so it stays sharp.
-              urlTemplate: isDark
-                  ? 'https://{s}.basemaps.cartocdn.com/rastertiles/dark_all/{z}/{x}/{y}{r}.png'
-                  : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-              subdomains: const ['a', 'b', 'c', 'd'],
-              retinaMode: RetinaMode.isHighDensity(context),
-              userAgentPackageName: 'com.guardnest.guardnest_parent',
-            ),
+            _basemap(context, isDark),
             if (widget.accuracy != null && widget.accuracy! > 0)
               CircleLayer(
                 circles: [
@@ -409,12 +428,11 @@ class _MapThumbState extends State<_MapThumb> {
                 ),
               ],
             ),
-            // CARTO's basemaps require attribution.
             const RichAttributionWidget(
               alignment: AttributionAlignment.bottomLeft,
               attributions: [
+                TextSourceAttribution('Esri, HERE, Garmin'),
                 TextSourceAttribution('OpenStreetMap contributors'),
-                TextSourceAttribution('CARTO'),
               ],
             ),
           ],
