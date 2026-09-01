@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import '../../data/builtin_keywords.dart';
 import '../../data/site_policy_repository.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/dialog_buttons.dart';
 import '../../widgets/feedback.dart';
 
 /// Site-admin view of every word that blocks a page, grouped by category: the
-/// lists built into the child app plus the words admins added. Add-only by
-/// design — a keyword, once blocking, can't be taken back out.
+/// lists built into the child app plus the words admins added. The added words
+/// can be edited or removed; the built-in lists ship with the child app and are
+/// read-only here.
 class ContentKeywordsScreen extends StatefulWidget {
   const ContentKeywordsScreen({super.key});
 
@@ -112,8 +114,8 @@ class _InfoBanner extends StatelessWidget {
           Expanded(
             child: Text(
               'A page is blocked on every child device when its visible text '
-              'matches one of these words. Keywords can be added but never '
-              'removed — the lists only ever grow stricter.',
+              'matches one of these words. Words you add can be edited or '
+              'removed; the built-in lists ship with the child app.',
               style: TextStyle(fontSize: 13),
             ),
           ),
@@ -215,7 +217,7 @@ class _CategoryPageState extends State<_CategoryPage> {
         ...?kBuiltinWeakKeywords[widget.category.id],
       };
 
-  Future<void> _add(List<String> mine) async {
+  Future<void> _add(List<String> all) async {
     final word = _controller.text.trim().toLowerCase();
     final messenger = ScaffoldMessenger.of(context);
     if (word.length < 3) {
@@ -224,7 +226,7 @@ class _CategoryPageState extends State<_CategoryPage> {
       );
       return;
     }
-    if (_existing(mine).contains(word)) {
+    if (_existing(all).contains(word)) {
       _controller.clear();
       messenger.showSnackBar(
         SnackBar(content: Text('"$word" already blocks in this category.')),
@@ -234,7 +236,7 @@ class _CategoryPageState extends State<_CategoryPage> {
     setState(() => _saving = true);
     try {
       await SitePolicyRepository.instance
-          .setCategoryKeywords(widget.category.id, [word, ...mine]);
+          .setCategoryKeywords(widget.category.id, [word, ...all]);
       _controller.clear();
     } catch (e) {
       messenger.showSnackBar(
@@ -243,6 +245,88 @@ class _CategoryPageState extends State<_CategoryPage> {
       );
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  /// Removing a keyword unblocks it on every child device, so it is confirmed.
+  Future<void> _remove(String word, List<String> all) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove keyword?'),
+        content: Text(
+          '"$word" will stop blocking pages on every child device.',
+        ),
+        actions: [
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+          DialogConfirmButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            label: 'Remove',
+            color: AppColors.danger,
+          ),
+        ],
+      ),
+    );
+    if (go != true) return;
+    try {
+      await SitePolicyRepository.instance.setCategoryKeywords(
+        widget.category.id,
+        [...all]..remove(word),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Couldn\'t remove it: ${friendlyError(e)}')),
+      );
+    }
+  }
+
+  Future<void> _edit(String word, List<String> all) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ctl = TextEditingController(text: word);
+    final next = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit keyword'),
+        content: TextField(
+          controller: ctl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Keyword'),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim().toLowerCase()),
+        ),
+        actions: [
+          DialogCancelButton(onPressed: () => Navigator.pop(ctx)),
+          DialogConfirmButton(
+            onPressed: () =>
+                Navigator.pop(ctx, ctl.text.trim().toLowerCase()),
+            label: 'Save',
+          ),
+        ],
+      ),
+    );
+    ctl.dispose();
+    if (next == null || next == word) return;
+    if (next.length < 3) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Use at least 3 characters.')),
+      );
+      return;
+    }
+    if (_existing(all).contains(next)) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('"$next" already blocks in this category.')),
+      );
+      return;
+    }
+    try {
+      await SitePolicyRepository.instance.setCategoryKeywords(
+        widget.category.id,
+        [for (final w in all) if (w == word) next else w],
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Couldn\'t save it: ${friendlyError(e)}')),
+      );
     }
   }
 
@@ -256,7 +340,11 @@ class _CategoryPageState extends State<_CategoryPage> {
       body: StreamBuilder<Map<String, List<String>>>(
         stream: SitePolicyRepository.instance.watchCategoryKeywords(),
         builder: (context, snap) {
-          final mine = _filter((snap.data ?? const {})[c.id] ?? const []);
+          // Writes are built from the WHOLE list; the filtered copy is only
+          // for display. Editing off the filtered list would silently drop
+          // every word the search box happened to be hiding.
+          final all = (snap.data ?? const {})[c.id] ?? const <String>[];
+          final mine = _filter(all);
           return ListView(
             padding: const EdgeInsets.fromLTRB(
                 AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.xxl),
@@ -266,16 +354,16 @@ class _CategoryPageState extends State<_CategoryPage> {
                   Expanded(
                     child: TextField(
                       controller: _controller,
-                      onSubmitted: (_) => _add(mine),
-                      decoration: InputDecoration(
+                      onSubmitted: (_) => _add(all),
+                      decoration: const InputDecoration(
                         hintText: 'Add a keyword',
-                        prefixIcon: const Icon(Icons.text_fields_rounded),
+                        prefixIcon: Icon(Icons.text_fields_rounded),
                       ),
                     ),
                   ),
                   const SizedBox(width: AppSpacing.sm),
                   IconButton.filled(
-                    onPressed: _saving ? null : () => _add(mine),
+                    onPressed: _saving ? null : () => _add(all),
                     icon: const Icon(Icons.add),
                   ),
                 ],
@@ -283,8 +371,11 @@ class _CategoryPageState extends State<_CategoryPage> {
               if (mine.isNotEmpty)
                 _KeywordGroup(
                   title: 'Added by admins',
-                  caption: 'Blocks the page on a single match.',
+                  caption: 'Blocks the page on a single match. '
+                      'Tap to edit, or use the cross to remove.',
                   words: mine,
+                  onEdit: (w) => _edit(w, all),
+                  onRemove: (w) => _remove(w, all),
                 ),
               if (strong.isNotEmpty)
                 _KeywordGroup(
@@ -312,14 +403,22 @@ class _KeywordGroup extends StatelessWidget {
     required this.title,
     required this.caption,
     required this.words,
+    this.onEdit,
+    this.onRemove,
   });
 
   final String title;
   final String caption;
   final List<String> words;
 
+  /// Both null for the built-in lists, which ship with the child app and so
+  /// cannot be changed from here.
+  final ValueChanged<String>? onEdit;
+  final ValueChanged<String>? onRemove;
+
   @override
   Widget build(BuildContext context) {
+    final editable = onEdit != null && onRemove != null;
     return Padding(
       padding: const EdgeInsets.only(top: AppSpacing.md),
       child: Column(
@@ -339,16 +438,32 @@ class _KeywordGroup extends StatelessWidget {
               style:
                   const TextStyle(fontSize: 11.5, color: AppColors.textMuted)),
           const SizedBox(height: AppSpacing.sm),
-          // Plain comma-separated text: chips at this volume rendered poorly
-          // and the list is read-only anyway.
-          SelectableText(
-            words.join(', '),
-            style: TextStyle(
-              fontSize: 13,
-              height: 1.6,
-              color: AppColors.textPrimaryOf(context),
+          if (editable)
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final w in words)
+                  InputChip(
+                    label: Text(w),
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => onEdit!(w),
+                    onDeleted: () => onRemove!(w),
+                    deleteIcon: const Icon(Icons.close_rounded, size: 16),
+                  ),
+              ],
+            )
+          else
+            // Plain comma-separated text: chips at this volume rendered poorly
+            // and the built-in lists are read-only anyway.
+            SelectableText(
+              words.join(', '),
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.6,
+                color: AppColors.textPrimaryOf(context),
+              ),
             ),
-          ),
         ],
       ),
     );
