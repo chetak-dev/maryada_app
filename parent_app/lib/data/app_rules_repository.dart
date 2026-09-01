@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'db.dart';
+import 'family_repository.dart';
 
 /// The persisted per-app rule (keyed by package name).
 class AppRuleData {
@@ -87,9 +88,13 @@ class AppRulesRepository {
   /// unioned by package name, each tagged with which children have it. Empty if
   /// no device has reported yet.
   Future<List<InstalledAppInfo>> loadInstalledApps(String familyId) async {
-    final kids = await Db.families.doc(familyId).collection('children').get();
+    // Scoped: a parent limited to one group must not see the apps of profiles
+    // their grant excluded.
+    final kids = await FamilyRepository.instance.scopedChildren(familyId);
     final names = <String, String>{};
-    final owners = <String, List<String>>{};
+    // A set, not a list: each of a child's devices reports its own inventory,
+    // so a shared app used to name that child once per device.
+    final owners = <String, Set<String>>{};
     for (final kid in kids.docs) {
       // A profile whose devices were all removed keeps its old report doc;
       // its apps must vanish from this list the moment it unpairs.
@@ -102,7 +107,7 @@ class AppRulesRepository {
         final name = a['appName'] as String?;
         if (pkg == null || pkg.isEmpty) continue;
         names[pkg] = (name == null || name.isEmpty) ? pkg : name;
-        (owners[pkg] ??= <String>[]).add(label);
+        (owners[pkg] ??= <String>{}).add(label);
       }
     }
     final list =
@@ -111,7 +116,7 @@ class AppRulesRepository {
               (e) => InstalledAppInfo(
                 packageName: e.key,
                 appName: e.value,
-                owners: owners[e.key] ?? const [],
+                owners: owners[e.key]?.toList() ?? const [],
               ),
             )
             .toList()

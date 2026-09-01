@@ -36,11 +36,21 @@ class DeviceRepository {
       'smsHistory',
       'youtubeHistory',
       'appCalls',
+      // Screen time is per-device too, and outlived the device without this.
+      'usage',
     ]) {
       try {
         await childRef.collection(feed).doc(deviceId).delete();
       } catch (_) {}
     }
+
+    // Its app inventory. Without this the removed device's apps kept showing
+    // in the profile's app list, because every `installedApps*` report is
+    // merged when no single device is selected.
+    try {
+      await childRef.collection('reports').doc('installedApps-$deviceId')
+          .delete();
+    } catch (_) {}
 
     // Its global registration — revoking must also cut the device's read
     // access and free a slot under the device limit.
